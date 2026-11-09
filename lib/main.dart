@@ -1322,36 +1322,6 @@ class _MapScreenState extends State<MapScreen> {
                                       }
                                     },
                             ),
-                            ActionChip(
-                              avatar: const Icon(
-                                Icons.train_outlined,
-                                size: 18,
-                              ),
-                              label: const Text('Find train station'),
-                              onPressed: () {
-                                final area = _destinationController.text.trim();
-                                if (area.isEmpty) {
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    const SnackBar(
-                                      content: Text(
-                                        'Enter a city or area first.',
-                                      ),
-                                    ),
-                                  );
-                                  return;
-                                }
-                                final query = 'train station $area';
-                                _destinationController.text = query;
-                                _searchPlaces(query, isOrigin: false);
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  const SnackBar(
-                                    content: Text(
-                                      'You can route to a station; train itineraries need a transit-routing service.',
-                                    ),
-                                  ),
-                                );
-                              },
-                            ),
                           ],
                         ),
                       ),
