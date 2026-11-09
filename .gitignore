@@ -1,0 +1,12 @@
+*.class
+*.iml
+.idea/
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.pub/
+/build/
+/coverage/
+*.symbols
+*.map.json
+.widget_preview/
