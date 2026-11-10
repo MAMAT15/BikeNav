@@ -8,6 +8,7 @@ import 'package:google_polyline_algorithm/google_polyline_algorithm.dart';
 import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'screens/add_path.dart';
 
 void main() {
   runApp(const BikeNavApp());
@@ -1177,6 +1178,14 @@ class _MapScreenState extends State<MapScreen> {
                           PopupMenuButton<String>(
                             tooltip: 'Account',
                             onSelected: (action) async {
+                              if (action == 'add_path') {
+                                await Navigator.of(context).push(
+                                  MaterialPageRoute(
+                                    builder: (_) => const AddPathScreen(),
+                                  ),
+                                );
+                                return;
+                              }
                               if (action == 'bike_profile') {
                                 await Navigator.of(context).push(
                                   MaterialPageRoute(
@@ -1198,6 +1207,14 @@ class _MapScreenState extends State<MapScreen> {
                               );
                             },
                             itemBuilder: (context) => const [
+                              PopupMenuItem(
+                                value: 'add_path',
+                                child: ListTile(
+                                  leading: Icon(Icons.add_road),
+                                  title: Text('Add Path'),
+                                  contentPadding: EdgeInsets.zero,
+                                ),
+                              ),
                               PopupMenuItem(
                                 value: 'bike_profile',
                                 child: ListTile(
