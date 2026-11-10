@@ -1,14 +1,20 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart'
+    show TargetPlatform, defaultTargetPlatform, kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart';
 
+import '../main.dart' show AuthService;
+import 'path_service.dart';
+
 class AddPathScreen extends StatefulWidget {
-  const AddPathScreen({super.key});
+  final String userEmail;
+
+  const AddPathScreen({super.key, this.userEmail = ''});
 
   @override
   State<AddPathScreen> createState() => _AddPathScreenState();
@@ -173,6 +179,34 @@ class _AddPathScreenState extends State<AddPathScreen> {
     FocusScope.of(context).unfocus();
   }
 
+  TrackPoint toTrackPoint(Position position) {
+    return TrackPoint(
+      point: LatLng(position.latitude, position.longitude),
+      time: position.timestamp,
+      accuracy: position.accuracy,
+    );
+  }
+
+  // On Android a foreground notification keeps GPS running while the
+  // phone is locked.
+  LocationSettings recordingSettings() {
+    if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
+      return AndroidSettings(
+        accuracy: LocationAccuracy.high,
+        distanceFilter: 5,
+        foregroundNotificationConfig: const ForegroundNotificationConfig(
+          notificationTitle: 'BikeNav is recording your ride',
+          notificationText: 'Open BikeNav to stop recording.',
+          enableWakeLock: true,
+        ),
+      );
+    }
+    return const LocationSettings(
+      accuracy: LocationAccuracy.high,
+      distanceFilter: 5,
+    );
+  }
+
   // Start GPS recording
   Future<void> startRecording() async {
     bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
@@ -206,17 +240,34 @@ class _AddPathScreenState extends State<AddPathScreen> {
 
     positionStream =
         Geolocator.getPositionStream(
-          locationSettings: const LocationSettings(
-            accuracy: LocationAccuracy.high,
-            distanceFilter: 5,
-          ),
-        ).listen((Position position) {
-          if (!mounted) return;
+          locationSettings: recordingSettings(),
+        ).listen(
+          (Position position) {
+            if (!mounted) return;
 
-          setState(() {
-            positions.add(position);
-          });
-        });
+            // Skip low-accuracy fixes and GPS jumps
+            final previous = positions.isEmpty
+                ? null
+                : toTrackPoint(positions.last);
+            if (!PathService.shouldKeepFix(previous, toTrackPoint(position))) {
+              return;
+            }
+
+            setState(() {
+              positions.add(position);
+            });
+          },
+          onError: (Object error) {
+            if (!mounted) return;
+
+            stopRecording();
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('Location updates stopped. Recording paused.'),
+              ),
+            );
+          },
+        );
 
     setState(() {
       isRecording = true;
@@ -252,41 +303,67 @@ class _AddPathScreenState extends State<AddPathScreen> {
 
     if (!mounted) return;
 
-    if (positions.isEmpty) {
+    final track = positions.map(toTrackPoint).toList();
+    final problem = PathService.validateTrack(track);
+
+    if (problem != null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please record a bike route first')),
+        SnackBar(content: Text(problem)),
       );
       return;
     }
 
-    final prefs = await SharedPreferences.getInstance();
+    String bikeType = '';
 
-    String? oldData = prefs.getString('bike_nav_paths');
-
-    List paths = [];
-
-    if (oldData != null) {
-      paths = jsonDecode(oldData);
+    try {
+      final account = await AuthService.findAccount(widget.userEmail);
+      bikeType = account?.bikeProfile?.type ?? '';
+    } catch (_) {
+      bikeType = '';
     }
 
-    Map newPath = {
-      'start': selectedStart!.name,
-      'end': selectedEnd!.name,
-      'startLatitude': selectedStart!.point.latitude,
-      'startLongitude': selectedStart!.point.longitude,
-      'endLatitude': selectedEnd!.point.latitude,
-      'endLongitude': selectedEnd!.point.longitude,
-      'description': description.text,
-      'status': 'Pending',
-      'date': DateTime.now().toString(),
-      'points': positions.map((p) {
-        return {'latitude': p.latitude, 'longitude': p.longitude};
-      }).toList(),
-    };
+    final firstTime = track.first.time;
+    final lastTime = track.last.time;
+    double durationSeconds = 0;
 
-    paths.add(newPath);
+    if (firstTime != null && lastTime != null) {
+      durationSeconds = lastTime.difference(firstTime).inMilliseconds / 1000;
+    }
 
-    await prefs.setString('bike_nav_paths', jsonEncode(paths));
+    // Routing uses the recorded track's first and last points.
+    // The selected places are kept as labels.
+    final newPath = CommunityPath(
+      id: PathService.newId(),
+      submitter: widget.userEmail,
+      startName: selectedStart!.name,
+      endName: selectedEnd!.name,
+      description: description.text,
+      status: PathService.statusPending,
+      date: DateTime.now().toString(),
+      points: track,
+      lengthMeters: PathService.trackLength(
+        track.map((p) => p.point).toList(),
+      ),
+      durationSeconds: durationSeconds < 0 ? 0 : durationSeconds,
+      bikeType: bikeType,
+      extra: {
+        'startLatitude': selectedStart!.point.latitude,
+        'startLongitude': selectedStart!.point.longitude,
+        'endLatitude': selectedEnd!.point.latitude,
+        'endLongitude': selectedEnd!.point.longitude,
+      },
+    );
+
+    try {
+      await PathService.savePath(newPath);
+    } catch (_) {
+      if (!mounted) return;
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Could not save the path. Try again.')),
+      );
+      return;
+    }
 
     if (!mounted) return;
 
@@ -489,7 +566,8 @@ class _AddPathScreenState extends State<AddPathScreen> {
               const SizedBox(height: 8),
 
               Text(
-                'Recorded GPS points: ${positions.length}',
+                'Recorded GPS points: ${positions.length} · '
+                '${PathService.formatLength(PathService.trackLength(positions.map((p) => LatLng(p.latitude, p.longitude)).toList()))}',
                 style: const TextStyle(fontSize: 13, color: Colors.grey),
               ),
 

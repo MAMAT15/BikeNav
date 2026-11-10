@@ -9,6 +9,8 @@ import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'screens/add_path.dart';
+import 'screens/community_paths.dart';
+import 'screens/path_service.dart';
 
 void main() {
   runApp(const BikeNavApp());
@@ -738,6 +740,23 @@ class _MapScreenState extends State<MapScreen> {
   bool _avoidFerries = false;
   bool _showAllDirections = false;
   DateTime? _lastRecalculation;
+  List<CommunityPath> _communityPaths = const [];
+
+  @override
+  void initState() {
+    super.initState();
+    _loadCommunityPaths();
+  }
+
+  Future<void> _loadCommunityPaths() async {
+    try {
+      final paths = await PathService.loadPaths();
+      if (!mounted) return;
+      setState(() => _communityPaths = paths);
+    } catch (_) {
+      // The map still works without the community path overlay.
+    }
+  }
 
   @override
   void dispose() {
@@ -886,7 +905,7 @@ class _MapScreenState extends State<MapScreen> {
               destination,
               near: _currentLocation ?? _mapController.camera.center,
             );
-      final route = await RouteService.fetchBikeRoute(
+      final route = await RouteService.planBikeRoute(
         start: start,
         end: end,
         avoidFerries: _avoidFerries,
@@ -1029,7 +1048,7 @@ class _MapScreenState extends State<MapScreen> {
     RouteResult? result;
     String? errorMessage;
     try {
-      result = await RouteService.fetchBikeRoute(
+      result = await RouteService.planBikeRoute(
         start: location,
         end: destination,
         avoidFerries: _avoidFerries,
@@ -1117,6 +1136,20 @@ class _MapScreenState extends State<MapScreen> {
       );
     }
 
+    final communityLines = <Polyline>[
+      for (final path in _communityPaths)
+        if (path.points.length > 1 &&
+            (path.isVerified ||
+                (path.isPending && path.isSubmittedBy(widget.userEmail))))
+          Polyline(
+            points: path.polyline,
+            strokeWidth: 4,
+            color: path.isVerified
+                ? const Color(0xFF168A65)
+                : const Color(0xFFF29900),
+          ),
+    ];
+
     return Scaffold(
       body: Stack(
         children: [
@@ -1141,6 +1174,8 @@ class _MapScreenState extends State<MapScreen> {
                     ),
                   ],
                 ),
+              if (communityLines.isNotEmpty)
+                PolylineLayer(polylines: communityLines),
               if (markers.isNotEmpty) MarkerLayer(markers: markers),
             ],
           ),
@@ -1181,9 +1216,24 @@ class _MapScreenState extends State<MapScreen> {
                               if (action == 'add_path') {
                                 await Navigator.of(context).push(
                                   MaterialPageRoute(
-                                    builder: (_) => const AddPathScreen(),
+                                    builder: (_) => AddPathScreen(
+                                      userEmail: widget.userEmail,
+                                    ),
                                   ),
                                 );
+                                _loadCommunityPaths();
+                                return;
+                              }
+                              if (action == 'community_paths') {
+                                await Navigator.of(context).push(
+                                  MaterialPageRoute(
+                                    builder: (_) => CommunityPathsScreen(
+                                      userEmail: widget.userEmail,
+                                      near: _currentLocation,
+                                    ),
+                                  ),
+                                );
+                                _loadCommunityPaths();
                                 return;
                               }
                               if (action == 'bike_profile') {
@@ -1212,6 +1262,14 @@ class _MapScreenState extends State<MapScreen> {
                                 child: ListTile(
                                   leading: Icon(Icons.add_road),
                                   title: Text('Add Path'),
+                                  contentPadding: EdgeInsets.zero,
+                                ),
+                              ),
+                              PopupMenuItem(
+                                value: 'community_paths',
+                                child: ListTile(
+                                  leading: Icon(Icons.route),
+                                  title: Text('Community paths'),
                                   contentPadding: EdgeInsets.zero,
                                 ),
                               ),
@@ -1734,6 +1792,117 @@ class RouteService {
     return parseValhallaResponse(
       jsonDecode(response.body) as Map<String, dynamic>,
       avoidFerries: avoidFerries,
+    );
+  }
+
+  // At most this many community paths are tried per trip, to keep the
+  // number of requests to the routing server small.
+  static const int maxCommunityCandidates = 2;
+
+  // Plans a bike route, going via a verified community path when that is
+  // faster than the normal route. Falls back to the normal route otherwise.
+  static Future<RouteResult> planBikeRoute({
+    required LatLng start,
+    required LatLng end,
+    bool avoidFerries = false,
+    List<CommunityPath>? communityPaths,
+  }) async {
+    final baseline = await fetchBikeRoute(
+      start: start,
+      end: end,
+      avoidFerries: avoidFerries,
+    );
+
+    List<PathCandidate> candidates;
+    try {
+      candidates = PathService.candidatesFor(
+        start: start,
+        end: end,
+        baselineMeters: baseline.distanceMeters,
+        paths: communityPaths ?? await PathService.loadVerifiedPaths(),
+      );
+    } catch (_) {
+      return baseline;
+    }
+
+    var best = baseline;
+    for (final candidate in candidates.take(maxCommunityCandidates)) {
+      try {
+        final stitched = await stitchCommunityPath(
+          start: start,
+          end: end,
+          candidate: candidate,
+          avoidFerries: avoidFerries,
+        );
+        if (stitched.durationSeconds < best.durationSeconds) best = stitched;
+      } catch (_) {
+        // This path could not be connected. Keep the best route so far.
+      }
+    }
+    return best;
+  }
+
+  // Builds start -> path entry -> recorded path -> path exit -> end.
+  static Future<RouteResult> stitchCommunityPath({
+    required LatLng start,
+    required LatLng end,
+    required PathCandidate candidate,
+    bool avoidFerries = false,
+  }) async {
+    final entry = candidate.entry;
+    final exit = candidate.exit;
+    final path = candidate.path;
+
+    // Skip a leg when the trip already starts or ends on the path.
+    final head = PathService.metersBetween(start, entry) > 20
+        ? await fetchBikeRoute(
+            start: start,
+            end: entry,
+            avoidFerries: avoidFerries,
+          )
+        : null;
+    final tail = PathService.metersBetween(exit, end) > 20
+        ? await fetchBikeRoute(
+            start: exit,
+            end: end,
+            avoidFerries: avoidFerries,
+          )
+        : null;
+
+    final pathSeconds = path.durationSeconds > 0
+        ? path.durationSeconds
+        : path.lengthMeters / PathService.fallbackMetersPerSecond;
+    final distanceMeters =
+        (head?.distanceMeters ?? 0) +
+        path.lengthMeters +
+        (tail?.distanceMeters ?? 0);
+    final durationSeconds =
+        (head?.durationSeconds ?? 0) +
+        pathSeconds +
+        (tail?.durationSeconds ?? 0);
+
+    // The first leg ends with an "arrived" step that is not the real arrival.
+    var headDirections = head?.directions ?? const <RouteInstruction>[];
+    if (headDirections.length > 1 && headDirections.last.distanceMeters == 0) {
+      headDirections = headDirections.sublist(0, headDirections.length - 1);
+    }
+
+    return RouteResult(
+      points: [...?head?.points, ...candidate.points, ...?tail?.points],
+      summary:
+          '${formatDistance(distanceMeters)} · about ${formatDuration(durationSeconds)} · via community path',
+      directions: [
+        ...headDirections,
+        RouteInstruction(
+          text: 'Follow community path: ${candidate.label}',
+          distanceMeters: path.lengthMeters,
+          beginLocation: entry,
+          endLocation: exit,
+        ),
+        ...?tail?.directions,
+      ],
+      distanceMeters: distanceMeters,
+      durationSeconds: durationSeconds,
     );
   }
 
