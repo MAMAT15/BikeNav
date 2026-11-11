@@ -5,6 +5,8 @@
     <!-- Keep GPS recording running in Add Path while the phone is locked. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
+    <!-- Needed by enableWakeLock in Add Path. Without it no GPS points arrive. -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
 
     <application
         android:label="BikeNav"

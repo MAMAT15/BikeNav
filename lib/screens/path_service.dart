@@ -217,6 +217,9 @@ class PathService {
   static const double maxFixAccuracyMeters = 30;
   static const double maxSpeedMetersPerSecond = 20;
 
+  // The recording must finish within this distance of the chosen destination.
+  static const double maxEndGapMeters = 100;
+
   // About 18 km/h, used when a path has no recorded ride duration.
   static const double fallbackMetersPerSecond = 5;
 
@@ -347,6 +350,16 @@ class PathService {
           '${minTrackMeters.round()} m before submitting.';
     }
     return null;
+  }
+
+  // Returns why a recording does not reach the chosen destination, or null
+  // if its last point is close enough.
+  static String? validateReachesEnd(List<TrackPoint> points, LatLng end) {
+    if (points.isEmpty) return 'Please record a bike route first';
+    final gap = metersBetween(points.last.point, end);
+    if (gap <= maxEndGapMeters) return null;
+    return 'Recording stopped ${formatLength(gap)} from the destination. '
+        'Ride to within ${maxEndGapMeters.round()} m of it before submitting.';
   }
 
   // Verified paths worth trying for a trip, closest fit first. A path is
