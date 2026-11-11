@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:google_polyline_algorithm/google_polyline_algorithm.dart';
 import 'package:http/http.dart' as http;
@@ -8,6 +9,7 @@ import 'package:latlong2/latlong.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:bike_nav/main.dart';
+import 'package:bike_nav/screens/add_path.dart';
 import 'package:bike_nav/screens/path_service.dart';
 
 // A path exactly as the first Add Path version saved it.
@@ -189,6 +191,35 @@ void main() {
         fix(-74.0 + index * 0.0001, index * 2, 5),
     ];
     expect(PathService.validateTrack(ride), isNull);
+  });
+
+  test('a recording must finish near the chosen destination', () {
+    const destination = LatLng(40.0, -73.99);
+    // About 43 m short of the destination.
+    const near = [TrackPoint(point: LatLng(40.0, -73.9905))];
+    // About 850 m short of the destination.
+    const far = [TrackPoint(point: LatLng(40.0, -74.0))];
+
+    expect(PathService.validateReachesEnd(near, destination), isNull);
+    expect(PathService.validateReachesEnd(far, destination), isNotNull);
+    expect(PathService.validateReachesEnd(const [], destination), isNotNull);
+  });
+
+  testWidgets('submit is disabled until a route is recorded and stopped', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      const MaterialApp(home: AddPathScreen(userEmail: 'rider@example.com')),
+    );
+
+    final submit = tester.widget<ElevatedButton>(
+      find.widgetWithText(ElevatedButton, 'Submit Path'),
+    );
+    expect(submit.onPressed, isNull);
+    expect(
+      find.text('Record a route and stop recording to submit it.'),
+      findsOneWidget,
+    );
   });
 
   test('skips paths that are a long way off the trip', () {

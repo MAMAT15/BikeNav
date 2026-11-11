@@ -249,7 +249,16 @@ class _AddPathScreenState extends State<AddPathScreen> {
             final previous = positions.isEmpty
                 ? null
                 : toTrackPoint(positions.last);
-            if (!PathService.shouldKeepFix(previous, toTrackPoint(position))) {
+            final next = toTrackPoint(position);
+            if (!PathService.shouldKeepFix(previous, next)) {
+              // A lone first point is often an old cached location. Start
+              // again from the new fix so it cannot block the recording.
+              if (positions.length == 1 &&
+                  PathService.shouldKeepFix(null, next)) {
+                setState(() {
+                  positions = [position];
+                });
+              }
               return;
             }
 
@@ -297,14 +306,18 @@ class _AddPathScreenState extends State<AddPathScreen> {
       return;
     }
 
+    // A route can only be submitted once it is recorded and stopped.
     if (isRecording) {
-      await stopRecording();
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Stop recording before submitting')),
+      );
+      return;
     }
 
-    if (!mounted) return;
-
     final track = positions.map(toTrackPoint).toList();
-    final problem = PathService.validateTrack(track);
+    final problem =
+        PathService.validateTrack(track) ??
+        PathService.validateReachesEnd(track, selectedEnd!.point);
 
     if (problem != null) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -460,6 +473,9 @@ class _AddPathScreenState extends State<AddPathScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // Submit is only available once a route is recorded and stopped.
+    final canSubmit = !isRecording && positions.isNotEmpty;
+
     return Scaffold(
       appBar: AppBar(
         title: const Text('Add a Bike Path'),
@@ -571,6 +587,14 @@ class _AddPathScreenState extends State<AddPathScreen> {
                 style: const TextStyle(fontSize: 13, color: Colors.grey),
               ),
 
+              if (isRecording && positions.isEmpty) ...[
+                const SizedBox(height: 4),
+                const Text(
+                  'Waiting for a GPS signal. Recording works best outdoors.',
+                  style: TextStyle(fontSize: 13, color: Color(0xFFB05A00)),
+                ),
+              ],
+
               const SizedBox(height: 22),
 
               // 4. Submit for Review
@@ -578,11 +602,15 @@ class _AddPathScreenState extends State<AddPathScreen> {
 
               const SizedBox(height: 8),
 
-              const Align(
+              Align(
                 alignment: Alignment.centerLeft,
                 child: Text(
-                  'Upload recorded GPS route and optional description.',
-                  style: TextStyle(fontSize: 14, color: Colors.black54),
+                  canSubmit
+                      ? 'Upload recorded GPS route and optional description.'
+                      : isRecording
+                      ? 'Stop recording to submit your route.'
+                      : 'Record a route and stop recording to submit it.',
+                  style: const TextStyle(fontSize: 14, color: Colors.black54),
                 ),
               ),
 
@@ -610,7 +638,7 @@ class _AddPathScreenState extends State<AddPathScreen> {
                 width: double.infinity,
                 height: 50,
                 child: ElevatedButton(
-                  onPressed: submitPath,
+                  onPressed: canSubmit ? submitPath : null,
                   style: ElevatedButton.styleFrom(
                     backgroundColor: const Color(0xFF2878F0),
                     foregroundColor: Colors.white,
