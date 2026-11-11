@@ -473,8 +473,18 @@ class _AddPathScreenState extends State<AddPathScreen> {
 
   @override
   Widget build(BuildContext context) {
-    // Submit is only available once a route is recorded and stopped.
-    final canSubmit = !isRecording && positions.isNotEmpty;
+    // Step 4 only appears once a recording is stopped and passes the
+    // PathService checks. Otherwise routeProblem says what is missing.
+    String? routeProblem;
+    if (!isRecording && positions.isNotEmpty) {
+      final track = positions.map(toTrackPoint).toList();
+      routeProblem = PathService.validateTrack(track);
+      routeProblem ??= selectedEnd == null
+          ? 'Select a destination from the suggestions to check your route.'
+          : PathService.validateReachesEnd(track, selectedEnd!.point);
+    }
+    final canSubmit =
+        !isRecording && positions.isNotEmpty && routeProblem == null;
 
     return Scaffold(
       appBar: AppBar(
@@ -540,8 +550,12 @@ class _AddPathScreenState extends State<AddPathScreen> {
                 child: ElevatedButton(
                   onPressed: isRecording ? stopRecording : startRecording,
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFFEAF3EE),
-                    foregroundColor: const Color(0xFF087B43),
+                    backgroundColor: isRecording
+                        ? const Color(0xFFD32F2F)
+                        : const Color(0xFFEAF3EE),
+                    foregroundColor: isRecording
+                        ? Colors.white
+                        : const Color(0xFF087B43),
                     elevation: 0,
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(10),
@@ -569,9 +583,9 @@ class _AddPathScreenState extends State<AddPathScreen> {
                         isRecording
                             ? 'Recording GPS...'
                             : 'Record GPS location while riding',
-                        style: const TextStyle(
+                        style: TextStyle(
                           fontSize: 12,
-                          color: Colors.black54,
+                          color: isRecording ? Colors.white70 : Colors.black54,
                         ),
                       ),
                     ],
@@ -595,63 +609,76 @@ class _AddPathScreenState extends State<AddPathScreen> {
                 ),
               ],
 
-              const SizedBox(height: 22),
-
-              // 4. Submit for Review
-              sectionTitle('4. Submit for Review'),
-
-              const SizedBox(height: 8),
-
-              Align(
-                alignment: Alignment.centerLeft,
-                child: Text(
-                  canSubmit
-                      ? 'Upload recorded GPS route and optional description.'
-                      : isRecording
-                      ? 'Stop recording to submit your route.'
-                      : 'Record a route and stop recording to submit it.',
-                  style: const TextStyle(fontSize: 14, color: Colors.black54),
-                ),
-              ),
-
-              const SizedBox(height: 14),
-
-              TextField(
-                controller: description,
-                maxLines: 3,
-                decoration: InputDecoration(
-                  hintText: 'Description (Optional)',
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  enabledBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(10),
-                    borderSide: const BorderSide(color: Color(0xFFE0E0E0)),
+              if (routeProblem != null) ...[
+                const SizedBox(height: 4),
+                Text(
+                  routeProblem,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                    fontSize: 13,
+                    color: Color(0xFFB05A00),
                   ),
                 ),
-              ),
+              ],
 
-              const SizedBox(height: 20),
+              // 4. Submit for Review, shown once a valid route is recorded
+              if (canSubmit) ...[
+                const SizedBox(height: 22),
 
-              // Submit Button
-              SizedBox(
-                width: double.infinity,
-                height: 50,
-                child: ElevatedButton(
-                  onPressed: canSubmit ? submitPath : null,
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFF2878F0),
-                    foregroundColor: Colors.white,
-                    shape: RoundedRectangleBorder(
+                sectionTitle('4. Submit for Review'),
+
+                const SizedBox(height: 8),
+
+                const Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    'Upload recorded GPS route and optional description.',
+                    style: TextStyle(fontSize: 14, color: Colors.black54),
+                  ),
+                ),
+
+                const SizedBox(height: 14),
+
+                TextField(
+                  controller: description,
+                  maxLines: 3,
+                  decoration: InputDecoration(
+                    hintText: 'Description (Optional)',
+                    border: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(10),
                     ),
-                  ),
-                  child: const Text(
-                    'Submit Path',
-                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                    enabledBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(10),
+                      borderSide: const BorderSide(color: Color(0xFFE0E0E0)),
+                    ),
                   ),
                 ),
-              ),
+
+                const SizedBox(height: 20),
+
+                // Submit Button
+                SizedBox(
+                  width: double.infinity,
+                  height: 50,
+                  child: ElevatedButton(
+                    onPressed: submitPath,
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFF2878F0),
+                      foregroundColor: Colors.white,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                    ),
+                    child: const Text(
+                      'Submit Path',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
             ],
           ),
         ),
