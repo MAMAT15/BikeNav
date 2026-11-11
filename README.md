@@ -80,7 +80,7 @@ Before running the app, make sure you have:
 
 1. Clone the repository:
    ```bash
-   git clone https://github.com/your-username/BikeNav.git
+   git clone https://github.com/MAMAT15/BikeNav.git
    cd BikeNav
    ```
 
@@ -124,7 +124,9 @@ The APK is generated at:
 ```text
 build/app/outputs/flutter-apk/app-release.apk
 ```
+## For Users Usage
 
+Go to Releases and download the latest version on your android phone as an APK file. Keep an eye out for new releases as it will include more features and optimizations.
 
 ## License
 
