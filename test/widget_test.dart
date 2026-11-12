@@ -25,7 +25,6 @@ void main() {
     expect(find.byType(MapScreen), findsOneWidget);
     expect(find.text('rider'), findsOneWidget);
     expect(find.byTooltip('Plan bike route'), findsOneWidget);
-    expect(find.text('Find train station'), findsNothing);
   });
 
   testWidgets('opens and saves the rider bike profile', (tester) async {
@@ -67,9 +66,7 @@ void main() {
     expect(account?.bikeProfile?.name, 'Updated city bike');
   });
 
-  testWidgets('shows route search controls', (
-    tester,
-  ) async {
+  testWidgets('shows route search controls', (tester) async {
     tester.view.physicalSize = const Size(780, 1200);
     tester.view.devicePixelRatio = 2;
     addTearDown(tester.view.resetPhysicalSize);
@@ -83,6 +80,8 @@ void main() {
     expect(find.text('BikeNav'), findsOneWidget);
     expect(find.byType(TextField), findsNWidgets(2));
     expect(find.byTooltip('Plan bike route'), findsOneWidget);
-    expect(find.text('Find train station'), findsNothing);
+    expect(find.text('No trains'), findsOneWidget);
+    expect(find.text('Boarding train station'), findsNothing);
+    expect(find.text('Exit train station'), findsNothing);
   });
 }

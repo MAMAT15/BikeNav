@@ -1,5 +1,6 @@
-﻿import 'dart:async';
+import 'dart:async';
 import 'dart:convert';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
@@ -8,8 +9,10 @@ import 'package:google_polyline_algorithm/google_polyline_algorithm.dart';
 import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+
 import 'screens/add_path.dart';
 import 'screens/community_paths.dart';
+import 'screens/mta_subway_service.dart';
 import 'screens/path_service.dart';
 
 void main() {
@@ -712,6 +715,9 @@ class MapScreen extends StatefulWidget {
 }
 
 class _MapScreenState extends State<MapScreen> {
+  static const _trainLineColor = Color(0xFF8E24AA);
+  static const _transferColor = Color(0xFFE65100);
+
   final MapController _mapController = MapController();
   final TextEditingController _originController = TextEditingController(
     text: 'Current location',
@@ -725,19 +731,26 @@ class _MapScreenState extends State<MapScreen> {
   List<PlaceSuggestion> _destinationSuggestions = const [];
   PlaceSuggestion? _selectedOrigin;
   PlaceSuggestion? _selectedDestination;
+  List<MtaStation> _trainRouteStations = const [];
+  MtaSubwayData? _mtaSubwayData;
   LatLng? _currentLocation;
   LatLng? _routeStart;
   LatLng? _routeEnd;
   List<LatLng> _routePoints = const [];
+  List<List<LatLng>> _routeSegments = const [];
+  List<MtaTrainLeg> _trainRouteLegs = const [];
   List<RouteInstruction> _directions = const [];
   StreamSubscription<Position>? _positionSubscription;
   int _nextDirectionIndex = 0;
   String _routeSummary = 'Search for a destination to plan your ride.';
   String _navigationMessage = '';
   bool _isLoading = false;
+  bool _isLoadingMta = false;
   bool _isNavigating = false;
   bool _isRecalculating = false;
   bool _avoidFerries = false;
+  bool _includeTrains = false;
+  bool _routeUsesTrain = false;
   bool _showAllDirections = false;
   DateTime? _lastRecalculation;
   List<CommunityPath> _communityPaths = const [];
@@ -874,6 +887,19 @@ class _MapScreenState extends State<MapScreen> {
     FocusScope.of(context).unfocus();
   }
 
+  Future<MtaSubwayData> _loadMtaSubwayData() async {
+    final loaded = _mtaSubwayData;
+    if (loaded != null) return loaded;
+    if (mounted) setState(() => _isLoadingMta = true);
+    try {
+      final data = await MtaSubwayService.load();
+      if (mounted) setState(() => _mtaSubwayData = data);
+      return data;
+    } finally {
+      if (mounted) setState(() => _isLoadingMta = false);
+    }
+  }
+
   Future<void> _planRoute() async {
     final origin = _originController.text.trim();
     final destination = _destinationController.text.trim();
@@ -883,10 +909,13 @@ class _MapScreenState extends State<MapScreen> {
       );
       return;
     }
+    final useTrains = _includeTrains;
 
     setState(() {
       _isLoading = true;
-      _routeSummary = 'Finding a bike route...';
+      _routeSummary = useTrains
+          ? 'Loading the MTA timetable and planning your trip...'
+          : 'Finding a bike route...';
       _directions = const [];
     });
 
@@ -905,19 +934,44 @@ class _MapScreenState extends State<MapScreen> {
               destination,
               near: _currentLocation ?? _mapController.camera.center,
             );
-      final route = await RouteService.planBikeRoute(
-        start: start,
-        end: end,
-        avoidFerries: _avoidFerries,
-      );
+      final mtaData = useTrains ? await _loadMtaSubwayData() : null;
+      final trainStations = mtaData?.nearestStationPair(start: start, end: end);
+      late final RouteResult route;
+      if (useTrains) {
+        final data = mtaData;
+        final stations = trainStations;
+        if (data == null || stations == null) {
+          throw StateError('MTA stations were not loaded.');
+        }
+        route = await RouteService.planBikeTrainRoute(
+          start: start,
+          end: end,
+          mtaData: data,
+          boardingStation: stations.boarding,
+          exitStation: stations.exit,
+          avoidFerries: _avoidFerries,
+        );
+      } else {
+        route = await RouteService.planBikeRoute(
+          start: start,
+          end: end,
+          avoidFerries: _avoidFerries,
+        );
+      }
 
       if (!mounted) return;
       setState(() {
         _routeStart = start;
         _routeEnd = end;
         _routePoints = route.points;
+        _routeSegments = route.segments.isEmpty
+            ? [route.points]
+            : route.segments;
+        _trainRouteLegs = route.trainLegs;
         _directions = route.directions;
         _routeSummary = route.summary;
+        _routeUsesTrain = useTrains;
+        _trainRouteStations = route.trainStations;
         _nextDirectionIndex = 0;
         _showAllDirections = false;
         _navigationMessage = '';
@@ -936,8 +990,12 @@ class _MapScreenState extends State<MapScreen> {
       setState(() {
         _routeSummary = error.toString().replaceFirst('Exception: ', '');
         _routePoints = const [];
+        _routeSegments = const [];
+        _trainRouteLegs = const [];
         _routeStart = null;
         _routeEnd = null;
+        _routeUsesTrain = false;
+        _trainRouteStations = const [];
         _isLoading = false;
       });
     }
@@ -1007,7 +1065,8 @@ class _MapScreenState extends State<MapScreen> {
     final canRecalculate =
         lastRecalculation == null ||
         now.difference(lastRecalculation) >= const Duration(seconds: 12);
-    if (!_isRecalculating &&
+    if (!_routeUsesTrain &&
+        !_isRecalculating &&
         canRecalculate &&
         _routePoints.isNotEmpty &&
         _distanceFromRoute(location) > 50) {
@@ -1063,8 +1122,12 @@ class _MapScreenState extends State<MapScreen> {
       if (result != null && _isNavigating) {
         _routeStart = location;
         _routePoints = result.points;
+        _routeSegments = [result.points];
+        _trainRouteLegs = const [];
         _directions = result.directions;
         _routeSummary = result.summary;
+        _routeUsesTrain = false;
+        _trainRouteStations = const [];
         _nextDirectionIndex = 0;
         _showAllDirections = false;
         _navigationMessage = 'Route updated';
@@ -1072,6 +1135,78 @@ class _MapScreenState extends State<MapScreen> {
         _navigationMessage = errorMessage;
       }
     });
+  }
+
+  void _showMtaStationDetails(MtaStation station, MtaTrainLeg? nextLeg) {
+    final data = _mtaSubwayData;
+    if (data == null) return;
+    final departures = nextLeg == null
+        ? const <MtaDeparture>[]
+        : data.nextDepartures(
+            station.id,
+            after: DateTime.now(),
+            route: nextLeg.route,
+            headsign: nextLeg.headsign,
+          );
+    showModalBottomSheet<void>(
+      context: context,
+      builder: (context) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(station.name, style: Theme.of(context).textTheme.titleLarge),
+              const SizedBox(height: 4),
+              Text(
+                'Lines: ${station.routes.isEmpty ? 'No scheduled service found' : station.routes.join(', ')}',
+              ),
+              const SizedBox(height: 12),
+              if (nextLeg == null)
+                Text('Trip ends here at ${station.name}; no onward departures.')
+              else if (departures.isEmpty)
+                Text(
+                  'No upcoming ${nextLeg.route} trains to '
+                  '${nextLeg.toStation} in the next two hours.',
+                )
+              else
+                for (final departure in departures)
+                  ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    leading: CircleAvatar(
+                      backgroundColor: const Color(0xFF2878F0),
+                      child: Text(
+                        departure.route,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                    title: Text(departure.headsign),
+                    trailing: Text(
+                      TimeOfDay.fromDateTime(departure.departure)
+                          .format(context),
+                    ),
+                  ),
+              const SizedBox(height: 4),
+              const Text(
+                'Published schedule only; delays and service changes are not included.',
+                style: TextStyle(fontSize: 12, color: Colors.black54),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  MtaTrainLeg? _nextTrainLegFrom(String stationId) {
+    for (final leg in _trainRouteLegs) {
+      if (leg.fromStationId == stationId) return leg;
+    }
+    return null;
   }
 
   @override
@@ -1115,6 +1250,48 @@ class _MapScreenState extends State<MapScreen> {
           ),
         ),
       );
+    }
+    if (_routeUsesTrain && _trainRouteStations.isNotEmpty) {
+      for (var index = 0; index < _trainRouteStations.length; index++) {
+        final station = _trainRouteStations[index];
+        final isBoarding = index == 0;
+        final isExit = index == _trainRouteStations.length - 1;
+        markers.add(
+          Marker(
+            point: station.point,
+            width: 36,
+            height: 36,
+            child: GestureDetector(
+              onTap: () => _showMtaStationDetails(
+                station,
+                _nextTrainLegFrom(station.id),
+              ),
+              child: isBoarding || isExit
+                  ? Icon(
+                      isBoarding ? Icons.train : Icons.location_on,
+                      color: _trainLineColor,
+                      size: isExit ? 30 : 26,
+                    )
+                  : Container(
+                      margin: const EdgeInsets.all(3),
+                      decoration: BoxDecoration(
+                        color: _transferColor,
+                        shape: BoxShape.circle,
+                        border: Border.all(color: Colors.white, width: 2),
+                        boxShadow: const [
+                          BoxShadow(color: Colors.black38, blurRadius: 4),
+                        ],
+                      ),
+                      child: const Icon(
+                        Icons.transfer_within_a_station,
+                        color: Colors.white,
+                        size: 21,
+                      ),
+                    ),
+            ),
+          ),
+        );
+      }
     }
     if (_currentLocation != null) {
       markers.add(
@@ -1167,11 +1344,25 @@ class _MapScreenState extends State<MapScreen> {
               if (_routePoints.isNotEmpty)
                 PolylineLayer(
                   polylines: [
-                    Polyline(
-                      points: _routePoints,
-                      strokeWidth: 6,
-                      color: const Color(0xFF4285F4),
-                    ),
+                    for (final segment in _routeSegments)
+                      if (segment.length > 1)
+                        Polyline(
+                          points: segment,
+                          strokeWidth: 6,
+                          color: const Color(0xFF4285F4),
+                        ),
+                  ],
+                ),
+              if (_trainRouteLegs.isNotEmpty)
+                PolylineLayer(
+                  polylines: [
+                    for (var index = 0; index < _trainRouteLegs.length; index++)
+                      if (_trainRouteLegs[index].pathPoints.length > 1)
+                        Polyline(
+                          points: _trainRouteLegs[index].pathPoints,
+                          strokeWidth: 7,
+                          color: index == 0 ? _trainLineColor : _transferColor,
+                        ),
                   ],
                 ),
               if (communityLines.isNotEmpty)
@@ -1386,7 +1577,7 @@ class _MapScreenState extends State<MapScreen> {
                               ),
                               label: const Text('Avoid ferries'),
                               selected: _avoidFerries,
-                              onSelected: _isNavigating
+                              onSelected: _isNavigating || _isLoading
                                   ? null
                                   : (value) {
                                       setState(() => _avoidFerries = value);
@@ -1397,9 +1588,64 @@ class _MapScreenState extends State<MapScreen> {
                                       }
                                     },
                             ),
+                            FilterChip(
+                              avatar: const Icon(Icons.train, size: 18),
+                              label: Text(
+                                _includeTrains ? 'Include trains' : 'No trains',
+                              ),
+                              selected: _includeTrains,
+                              onSelected: _isNavigating || _isLoading
+                                  ? null
+                                  : (value) {
+                                      setState(() {
+                                        _includeTrains = value;
+                                        _routePoints = const [];
+                                        _routeSegments = const [];
+                                        _trainRouteLegs = const [];
+                                        _directions = const [];
+                                        _routeUsesTrain = false;
+                                        _trainRouteStations = const [];
+                                        _routeSummary = 'Search for a destination to plan your ride.';
+                                      });
+                                      final hasDestination =
+                                          _destinationController.text
+                                              .trim()
+                                              .isNotEmpty;
+                                      if (hasDestination) {
+                                        _planRoute();
+                                      }
+                                    },
+                            ),
                           ],
                         ),
                       ),
+                      if (_includeTrains) ...[
+                        const Padding(
+                          padding: EdgeInsets.fromLTRB(8, 0, 8, 6),
+                          child: Align(
+                            alignment: Alignment.centerLeft,
+                            child: Text(
+                              'Uses the published MTA timetable, not live arrivals. '
+                              'Check service notices and bike rules.',
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: Colors.black54,
+                              ),
+                            ),
+                          ),
+                        ),
+                        if (_isLoadingMta)
+                          const Padding(
+                            padding: EdgeInsets.only(bottom: 6),
+                            child: Text(
+                              'Downloading MTA schedule (about 20 MB)...',
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: Colors.black54,
+                              ),
+                            ),
+                          ),
+                      ],
                     ],
                   ),
                 ),
@@ -1474,6 +1720,28 @@ class _MapScreenState extends State<MapScreen> {
                           ),
                         ],
                       ),
+                      if (_trainRouteLegs.isNotEmpty) ...[
+                        const SizedBox(height: 6),
+                        Wrap(
+                          spacing: 16,
+                          runSpacing: 4,
+                          children: [
+                            _buildRouteLegendItem(
+                              color: const Color(0xFF4285F4),
+                              label: 'Bike route',
+                            ),
+                            _buildRouteLegendItem(
+                              color: _trainLineColor,
+                              label: 'Train route',
+                            ),
+                            if (_trainRouteLegs.length > 1)
+                              _buildRouteLegendItem(
+                                color: _transferColor,
+                                label: 'After transfer',
+                              ),
+                          ],
+                        ),
+                      ],
                       if (_navigationMessage.isNotEmpty) ...[
                         const SizedBox(height: 4),
                         Align(
@@ -1626,6 +1894,24 @@ class _MapScreenState extends State<MapScreen> {
           ),
         ],
       ),
+    );
+  }
+
+  Widget _buildRouteLegendItem({required Color color, required String label}) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          width: 20,
+          height: 4,
+          decoration: BoxDecoration(
+            color: color,
+            borderRadius: BorderRadius.circular(2),
+          ),
+        ),
+        const SizedBox(width: 6),
+        Text(label, style: Theme.of(context).textTheme.labelSmall),
+      ],
     );
   }
 
@@ -1842,6 +2128,113 @@ class RouteService {
     return best;
   }
 
+  // Uses the published MTA timetable to find a subway itinerary between the
+  // nearest stations, with bicycle routes to and from those stations.
+  static Future<RouteResult> planBikeTrainRoute({
+    required LatLng start,
+    required LatLng end,
+    required MtaSubwayData mtaData,
+    required MtaStation boardingStation,
+    required MtaStation exitStation,
+    bool avoidFerries = false,
+  }) async {
+    final toBoarding = await planBikeRoute(
+      start: start,
+      end: boardingStation.point,
+      avoidFerries: avoidFerries,
+    );
+    final fromExit = await planBikeRoute(
+      start: exitStation.point,
+      end: end,
+      avoidFerries: avoidFerries,
+    );
+
+    var boardingDirections = toBoarding.directions;
+    if (boardingDirections.length > 1 &&
+        boardingDirections.last.distanceMeters == 0) {
+      boardingDirections = boardingDirections.sublist(
+        0,
+        boardingDirections.length - 1,
+      );
+    }
+    final bikeDistance = toBoarding.distanceMeters + fromExit.distanceMeters;
+    final bikeDuration = toBoarding.durationSeconds + fromExit.durationSeconds;
+    final trainJourney = mtaData.findJourney(
+      startStationId: boardingStation.id,
+      endStationId: exitStation.id,
+      after: DateTime.now().add(
+        Duration(seconds: toBoarding.durationSeconds.ceil()),
+      ),
+    );
+    if (trainJourney == null || trainJourney.isEmpty) {
+      throw Exception(
+        'No scheduled subway trip was found between '
+        '${boardingStation.name} and ${exitStation.name}.',
+      );
+    }
+
+    final stationsById = {
+      for (final station in mtaData.stations) station.id: station,
+    };
+    final trainStations = <MtaStation>[];
+    final includedStationIds = <String>{};
+    for (final leg in trainJourney) {
+      for (final stationId in [leg.fromStationId, leg.toStationId]) {
+        final station = stationsById[stationId];
+        if (station != null && includedStationIds.add(stationId)) {
+          trainStations.add(station);
+        }
+      }
+    }
+    final journeyDirections = <RouteInstruction>[];
+    for (final leg in trainJourney) {
+      final from = stationsById[leg.fromStationId];
+      final to = stationsById[leg.toStationId];
+      journeyDirections.add(
+        RouteInstruction(
+          text:
+              'Take the ${leg.route} train from ${leg.fromStation} to '
+              '${leg.toStation}. Departs ${formatTime(leg.departure)}; '
+              'scheduled arrival ${formatTime(leg.arrival)}.',
+          distanceMeters: 0,
+          beginLocation: from?.point,
+          endLocation: to?.point,
+        ),
+      );
+    }
+    final scheduledDuration =
+        trainJourney.last.arrival
+            .difference(DateTime.now())
+            .inSeconds
+            .toDouble() +
+        fromExit.durationSeconds;
+
+    return RouteResult(
+      points: [...toBoarding.points, ...fromExit.points],
+      segments: [toBoarding.points, fromExit.points],
+      trainLegs: trainJourney,
+      trainStations: trainStations,
+      summary:
+          '${formatDistance(bikeDistance)} by bike, about '
+          '${formatDuration(bikeDuration)} biking · MTA ${trainJourney.map((leg) => leg.route).join(' → ')} '
+          'from ${boardingStation.name} to ${exitStation.name} · '
+          'scheduled arrival ${formatTime(trainJourney.last.arrival)}',
+      directions: [
+        ...boardingDirections,
+        ...journeyDirections,
+        ...fromExit.directions,
+      ],
+      distanceMeters: bikeDistance,
+      durationSeconds: math.max(bikeDuration, scheduledDuration),
+    );
+  }
+
+  static String formatTime(DateTime time) {
+    final hour = time.hour % 12 == 0 ? 12 : time.hour % 12;
+    return '$hour:${time.minute.toString().padLeft(2, '0')} '
+        '${time.hour < 12 ? 'AM' : 'PM'}';
+  }
+
   // Builds start -> path entry -> recorded path -> path exit -> end.
   static Future<RouteResult> stitchCommunityPath({
     required LatLng start,
@@ -2030,6 +2423,9 @@ class RouteInstruction {
 
 class RouteResult {
   final List<LatLng> points;
+  final List<List<LatLng>> segments;
+  final List<MtaTrainLeg> trainLegs;
+  final List<MtaStation> trainStations;
   final String summary;
   final List<RouteInstruction> directions;
   final double distanceMeters;
@@ -2041,5 +2437,8 @@ class RouteResult {
     required this.directions,
     required this.distanceMeters,
     required this.durationSeconds,
+    this.segments = const [],
+    this.trainLegs = const [],
+    this.trainStations = const [],
   });
 }
