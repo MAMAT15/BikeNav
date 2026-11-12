@@ -748,6 +748,7 @@ class _MapScreenState extends State<MapScreen> {
   bool _isLoadingMta = false;
   bool _isNavigating = false;
   bool _isRecalculating = false;
+  bool _showNavigationPanel = false;
   bool _avoidFerries = false;
   bool _includeTrains = false;
   bool _routeUsesTrain = false;
@@ -913,6 +914,7 @@ class _MapScreenState extends State<MapScreen> {
 
     setState(() {
       _isLoading = true;
+      _showNavigationPanel = false;
       _routeSummary = useTrains
           ? 'Loading the MTA timetable and planning your trip...'
           : 'Finding a bike route...';
@@ -976,6 +978,7 @@ class _MapScreenState extends State<MapScreen> {
         _showAllDirections = false;
         _navigationMessage = '';
         _isLoading = false;
+        _showNavigationPanel = true;
       });
 
       _mapController.move(
@@ -997,6 +1000,7 @@ class _MapScreenState extends State<MapScreen> {
         _routeUsesTrain = false;
         _trainRouteStations = const [];
         _isLoading = false;
+        _showNavigationPanel = false;
       });
     }
   }
@@ -1050,6 +1054,7 @@ class _MapScreenState extends State<MapScreen> {
       _isNavigating = false;
       _isRecalculating = false;
       _navigationMessage = 'Navigation paused';
+      _showNavigationPanel = false;
     });
   }
 
@@ -1370,291 +1375,294 @@ class _MapScreenState extends State<MapScreen> {
               if (markers.isNotEmpty) MarkerLayer(markers: markers),
             ],
           ),
-          SafeArea(
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
-              child: Material(
-                elevation: 5,
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(14),
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(12, 4, 4, 8),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Row(
-                        children: [
-                          const Icon(
-                            Icons.directions_bike,
-                            color: Color(0xFF4285F4),
-                          ),
-                          const SizedBox(width: 10),
-                          Expanded(
-                            child: Text(
-                              'BikeNav',
-                              style: Theme.of(context).textTheme.titleMedium
-                                  ?.copyWith(fontWeight: FontWeight.w700),
-                            ),
-                          ),
-                          Text(
-                            widget.userEmail.split('@').first,
-                            overflow: TextOverflow.ellipsis,
-                            style: Theme.of(context).textTheme.bodySmall,
-                          ),
-                          PopupMenuButton<String>(
-                            tooltip: 'Account',
-                            onSelected: (action) async {
-                              if (action == 'add_path') {
-                                await Navigator.of(context).push(
-                                  MaterialPageRoute(
-                                    builder: (_) => AddPathScreen(
-                                      userEmail: widget.userEmail,
-                                    ),
-                                  ),
-                                );
-                                _loadCommunityPaths();
-                                return;
-                              }
-                              if (action == 'community_paths') {
-                                await Navigator.of(context).push(
-                                  MaterialPageRoute(
-                                    builder: (_) => CommunityPathsScreen(
-                                      userEmail: widget.userEmail,
-                                      near: _currentLocation,
-                                    ),
-                                  ),
-                                );
-                                _loadCommunityPaths();
-                                return;
-                              }
-                              if (action == 'bike_profile') {
-                                await Navigator.of(context).push(
-                                  MaterialPageRoute(
-                                    builder: (_) => BikeProfileScreen(
-                                      userEmail: widget.userEmail,
-                                    ),
-                                  ),
-                                );
-                                return;
-                              }
-                              final navigator = Navigator.of(context);
-                              await AuthService.signOut();
-                              if (!mounted) return;
-                              navigator.pushAndRemoveUntil(
-                                MaterialPageRoute(
-                                  builder: (_) => const AuthScreen(),
-                                ),
-                                (route) => false,
-                              );
-                            },
-                            itemBuilder: (context) => const [
-                              PopupMenuItem(
-                                value: 'add_path',
-                                child: ListTile(
-                                  leading: Icon(Icons.add_road),
-                                  title: Text('Add Path'),
-                                  contentPadding: EdgeInsets.zero,
-                                ),
-                              ),
-                              PopupMenuItem(
-                                value: 'community_paths',
-                                child: ListTile(
-                                  leading: Icon(Icons.route),
-                                  title: Text('Community paths'),
-                                  contentPadding: EdgeInsets.zero,
-                                ),
-                              ),
-                              PopupMenuItem(
-                                value: 'bike_profile',
-                                child: ListTile(
-                                  leading: Icon(Icons.pedal_bike),
-                                  title: Text('Bike profile'),
-                                  contentPadding: EdgeInsets.zero,
-                                ),
-                              ),
-                              PopupMenuItem(
-                                value: 'log_out',
-                                child: ListTile(
-                                  leading: Icon(Icons.logout),
-                                  title: Text('Log out'),
-                                  contentPadding: EdgeInsets.zero,
-                                ),
-                              ),
-                            ],
-                            icon: const Icon(Icons.account_circle_outlined),
-                          ),
-                        ],
-                      ),
-                      const Divider(height: 1),
-                      Row(
-                        children: [
-                          const Icon(
-                            Icons.trip_origin,
-                            color: Color(0xFF168A65),
-                            size: 20,
-                          ),
-                          const SizedBox(width: 10),
-                          Expanded(
-                            child: TextField(
-                              controller: _originController,
-                              textInputAction: TextInputAction.next,
-                              onChanged: (value) =>
-                                  _searchPlaces(value, isOrigin: true),
-                              decoration: const InputDecoration(
-                                hintText: 'Starting point',
-                                border: InputBorder.none,
-                                isDense: true,
-                              ),
-                            ),
-                          ),
-                          IconButton(
-                            tooltip: 'Use current location',
-                            onPressed: _useCurrentLocation,
-                            icon: const Icon(Icons.my_location),
-                          ),
-                        ],
-                      ),
-                      if (_originSuggestions.isNotEmpty)
-                        _buildSuggestionList(
-                          _originSuggestions,
-                          isOrigin: true,
-                        ),
-                      const Divider(height: 1, indent: 30),
-                      Row(
-                        children: [
-                          const Icon(
-                            Icons.location_on,
-                            color: Color(0xFFDB4437),
-                            size: 22,
-                          ),
-                          const SizedBox(width: 10),
-                          Expanded(
-                            child: TextField(
-                              controller: _destinationController,
-                              textInputAction: TextInputAction.search,
-                              onChanged: (value) =>
-                                  _searchPlaces(value, isOrigin: false),
-                              onSubmitted: (_) => _planRoute(),
-                              decoration: const InputDecoration(
-                                hintText: 'Where to?',
-                                border: InputBorder.none,
-                                isDense: true,
-                              ),
-                            ),
-                          ),
-                          IconButton(
-                            tooltip: 'Plan bike route',
-                            onPressed: _isLoading ? null : _planRoute,
-                            icon: _isLoading
-                                ? const SizedBox(
-                                    width: 20,
-                                    height: 20,
-                                    child: CircularProgressIndicator(
-                                      strokeWidth: 2,
-                                    ),
-                                  )
-                                : const Icon(Icons.search),
-                          ),
-                        ],
-                      ),
-                      if (_destinationSuggestions.isNotEmpty)
-                        _buildSuggestionList(
-                          _destinationSuggestions,
-                          isOrigin: false,
-                        ),
-                      const Divider(height: 1),
-                      Padding(
-                        padding: const EdgeInsets.only(top: 8),
-                        child: Wrap(
-                          spacing: 8,
-                          runSpacing: 4,
-                          crossAxisAlignment: WrapCrossAlignment.center,
+          if (!_isNavigating)
+            SafeArea(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+                child: Material(
+                  elevation: 5,
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(14),
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(12, 4, 4, 8),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Row(
                           children: [
-                            FilterChip(
-                              avatar: const Icon(
-                                Icons.directions_boat,
-                                size: 18,
-                              ),
-                              label: const Text('Avoid ferries'),
-                              selected: _avoidFerries,
-                              onSelected: _isNavigating || _isLoading
-                                  ? null
-                                  : (value) {
-                                      setState(() => _avoidFerries = value);
-                                      if (_destinationController.text
-                                          .trim()
-                                          .isNotEmpty) {
-                                        _planRoute();
-                                      }
-                                    },
+                            const Icon(
+                              Icons.directions_bike,
+                              color: Color(0xFF4285F4),
                             ),
-                            FilterChip(
-                              avatar: const Icon(Icons.train, size: 18),
-                              label: Text(
-                                _includeTrains ? 'Include trains' : 'No trains',
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: Text(
+                                'BikeNav',
+                                style: Theme.of(context).textTheme.titleMedium
+                                    ?.copyWith(fontWeight: FontWeight.w700),
                               ),
-                              selected: _includeTrains,
-                              onSelected: _isNavigating || _isLoading
-                                  ? null
-                                  : (value) {
-                                      setState(() {
-                                        _includeTrains = value;
-                                        _routePoints = const [];
-                                        _routeSegments = const [];
-                                        _trainRouteLegs = const [];
-                                        _directions = const [];
-                                        _routeUsesTrain = false;
-                                        _trainRouteStations = const [];
-                                        _routeSummary = 'Search for a destination to plan your ride.';
-                                      });
-                                      final hasDestination =
-                                          _destinationController.text
-                                              .trim()
-                                              .isNotEmpty;
-                                      if (hasDestination) {
-                                        _planRoute();
-                                      }
-                                    },
+                            ),
+                            Text(
+                              widget.userEmail.split('@').first,
+                              overflow: TextOverflow.ellipsis,
+                              style: Theme.of(context).textTheme.bodySmall,
+                            ),
+                            PopupMenuButton<String>(
+                              tooltip: 'Account',
+                              onSelected: (action) async {
+                                if (action == 'add_path') {
+                                  await Navigator.of(context).push(
+                                    MaterialPageRoute(
+                                      builder: (_) => AddPathScreen(
+                                        userEmail: widget.userEmail,
+                                      ),
+                                    ),
+                                  );
+                                  _loadCommunityPaths();
+                                  return;
+                                }
+                                if (action == 'community_paths') {
+                                  await Navigator.of(context).push(
+                                    MaterialPageRoute(
+                                      builder: (_) => CommunityPathsScreen(
+                                        userEmail: widget.userEmail,
+                                        near: _currentLocation,
+                                      ),
+                                    ),
+                                  );
+                                  _loadCommunityPaths();
+                                  return;
+                                }
+                                if (action == 'bike_profile') {
+                                  await Navigator.of(context).push(
+                                    MaterialPageRoute(
+                                      builder: (_) => BikeProfileScreen(
+                                        userEmail: widget.userEmail,
+                                      ),
+                                    ),
+                                  );
+                                  return;
+                                }
+                                final navigator = Navigator.of(context);
+                                await AuthService.signOut();
+                                if (!mounted) return;
+                                navigator.pushAndRemoveUntil(
+                                  MaterialPageRoute(
+                                    builder: (_) => const AuthScreen(),
+                                  ),
+                                  (route) => false,
+                                );
+                              },
+                              itemBuilder: (context) => const [
+                                PopupMenuItem(
+                                  value: 'add_path',
+                                  child: ListTile(
+                                    leading: Icon(Icons.add_road),
+                                    title: Text('Add Path'),
+                                    contentPadding: EdgeInsets.zero,
+                                  ),
+                                ),
+                                PopupMenuItem(
+                                  value: 'community_paths',
+                                  child: ListTile(
+                                    leading: Icon(Icons.route),
+                                    title: Text('Community paths'),
+                                    contentPadding: EdgeInsets.zero,
+                                  ),
+                                ),
+                                PopupMenuItem(
+                                  value: 'bike_profile',
+                                  child: ListTile(
+                                    leading: Icon(Icons.pedal_bike),
+                                    title: Text('Bike profile'),
+                                    contentPadding: EdgeInsets.zero,
+                                  ),
+                                ),
+                                PopupMenuItem(
+                                  value: 'log_out',
+                                  child: ListTile(
+                                    leading: Icon(Icons.logout),
+                                    title: Text('Log out'),
+                                    contentPadding: EdgeInsets.zero,
+                                  ),
+                                ),
+                              ],
+                              icon: const Icon(Icons.account_circle_outlined),
                             ),
                           ],
                         ),
-                      ),
-                      if (_includeTrains) ...[
-                        const Padding(
-                          padding: EdgeInsets.fromLTRB(8, 0, 8, 6),
-                          child: Align(
-                            alignment: Alignment.centerLeft,
-                            child: Text(
-                              'Uses the published MTA timetable, not live arrivals. '
-                              'Check service notices and bike rules.',
-                              style: TextStyle(
-                                fontSize: 12,
-                                color: Colors.black54,
+                        const Divider(height: 1),
+                        Row(
+                          children: [
+                            const Icon(
+                              Icons.trip_origin,
+                              color: Color(0xFF168A65),
+                              size: 20,
+                            ),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: TextField(
+                                controller: _originController,
+                                textInputAction: TextInputAction.next,
+                                onChanged: (value) =>
+                                    _searchPlaces(value, isOrigin: true),
+                                decoration: const InputDecoration(
+                                  hintText: 'Starting point',
+                                  border: InputBorder.none,
+                                  isDense: true,
+                                ),
                               ),
                             ),
+                            IconButton(
+                              tooltip: 'Use current location',
+                              onPressed: _useCurrentLocation,
+                              icon: const Icon(Icons.my_location),
+                            ),
+                          ],
+                        ),
+                        if (_originSuggestions.isNotEmpty)
+                          _buildSuggestionList(
+                            _originSuggestions,
+                            isOrigin: true,
+                          ),
+                        const Divider(height: 1, indent: 30),
+                        Row(
+                          children: [
+                            const Icon(
+                              Icons.location_on,
+                              color: Color(0xFFDB4437),
+                              size: 22,
+                            ),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: TextField(
+                                controller: _destinationController,
+                                textInputAction: TextInputAction.search,
+                                onChanged: (value) =>
+                                    _searchPlaces(value, isOrigin: false),
+                                onSubmitted: (_) => _planRoute(),
+                                decoration: const InputDecoration(
+                                  hintText: 'Where to?',
+                                  border: InputBorder.none,
+                                  isDense: true,
+                                ),
+                              ),
+                            ),
+                            IconButton(
+                              tooltip: 'Plan bike route',
+                              onPressed: _isLoading ? null : _planRoute,
+                              icon: _isLoading
+                                  ? const SizedBox(
+                                      width: 20,
+                                      height: 20,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                      ),
+                                    )
+                                  : const Icon(Icons.search),
+                            ),
+                          ],
+                        ),
+                        if (_destinationSuggestions.isNotEmpty)
+                          _buildSuggestionList(
+                            _destinationSuggestions,
+                            isOrigin: false,
+                          ),
+                        const Divider(height: 1),
+                        Padding(
+                          padding: const EdgeInsets.only(top: 8),
+                          child: Wrap(
+                            spacing: 8,
+                            runSpacing: 4,
+                            crossAxisAlignment: WrapCrossAlignment.center,
+                            children: [
+                              FilterChip(
+                                avatar: const Icon(
+                                  Icons.directions_boat,
+                                  size: 18,
+                                ),
+                                label: const Text('Avoid ferries'),
+                                selected: _avoidFerries,
+                                onSelected: _isNavigating || _isLoading
+                                    ? null
+                                    : (value) {
+                                        setState(() => _avoidFerries = value);
+                                        if (_destinationController.text
+                                            .trim()
+                                            .isNotEmpty) {
+                                          _planRoute();
+                                        }
+                                      },
+                              ),
+                              FilterChip(
+                                avatar: const Icon(Icons.train, size: 18),
+                                label: Text(
+                                  _includeTrains
+                                      ? 'Include trains'
+                                      : 'No trains',
+                                ),
+                                selected: _includeTrains,
+                                onSelected: _isNavigating || _isLoading
+                                    ? null
+                                    : (value) {
+                                        setState(() {
+                                          _includeTrains = value;
+                                          _routePoints = const [];
+                                          _routeSegments = const [];
+                                          _trainRouteLegs = const [];
+                                          _directions = const [];
+                                          _routeUsesTrain = false;
+                                          _trainRouteStations = const [];
+                                          _routeSummary = 'Search for a destination to plan your ride.';
+                                        });
+                                        final hasDestination =
+                                            _destinationController.text
+                                                .trim()
+                                                .isNotEmpty;
+                                        if (hasDestination) {
+                                          _planRoute();
+                                        }
+                                      },
+                              ),
+                            ],
                           ),
                         ),
-                        if (_isLoadingMta)
+                        if (_includeTrains) ...[
                           const Padding(
-                            padding: EdgeInsets.only(bottom: 6),
-                            child: Text(
-                              'Downloading MTA schedule (about 20 MB)...',
-                              style: TextStyle(
-                                fontSize: 12,
-                                color: Colors.black54,
+                            padding: EdgeInsets.fromLTRB(8, 0, 8, 6),
+                            child: Align(
+                              alignment: Alignment.centerLeft,
+                              child: Text(
+                                'Uses the published MTA timetable, not live arrivals. '
+                                'Check service notices and bike rules.',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: Colors.black54,
+                                ),
                               ),
                             ),
                           ),
+                          if (_isLoadingMta)
+                            const Padding(
+                              padding: EdgeInsets.only(bottom: 6),
+                              child: Text(
+                                'Downloading MTA schedule (about 20 MB)...',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: Colors.black54,
+                                ),
+                              ),
+                            ),
+                        ],
                       ],
-                    ],
+                    ),
                   ),
                 ),
               ),
             ),
-          ),
           Positioned(
             right: 16,
-            bottom: 230,
+            bottom: _showNavigationPanel ? 230 : 16,
             child: FloatingActionButton.small(
               heroTag: 'current-location',
               tooltip: 'Center on current location',
@@ -1664,234 +1672,241 @@ class _MapScreenState extends State<MapScreen> {
               child: const Icon(Icons.my_location),
             ),
           ),
-          Positioned(
-            left: 0,
-            right: 0,
-            bottom: 0,
-            child: SafeArea(
-              top: false,
-              child: Container(
-                constraints: BoxConstraints(
-                  maxHeight: _showAllDirections
-                      ? MediaQuery.sizeOf(context).height * 0.65
-                      : 220,
-                ),
-                padding: const EdgeInsets.fromLTRB(20, 12, 20, 14),
-                decoration: const BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black26,
-                      blurRadius: 12,
-                      offset: Offset(0, -3),
+          if (_showNavigationPanel && _routePoints.isNotEmpty)
+            Positioned(
+              left: 0,
+              right: 0,
+              bottom: 0,
+              child: SafeArea(
+                top: false,
+                child: Container(
+                  constraints: BoxConstraints(
+                    maxHeight: _showAllDirections
+                        ? MediaQuery.sizeOf(context).height * 0.65
+                        : 220,
+                  ),
+                  padding: const EdgeInsets.fromLTRB(20, 12, 20, 14),
+                  decoration: const BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.vertical(
+                      top: Radius.circular(18),
                     ),
-                  ],
-                ),
-                child: SingleChildScrollView(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Center(
-                        child: Container(
-                          width: 34,
-                          height: 4,
-                          decoration: BoxDecoration(
-                            color: Colors.black26,
-                            borderRadius: BorderRadius.circular(4),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black26,
+                        blurRadius: 12,
+                        offset: Offset(0, -3),
+                      ),
+                    ],
+                  ),
+                  child: SingleChildScrollView(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Center(
+                          child: Container(
+                            width: 34,
+                            height: 4,
+                            decoration: BoxDecoration(
+                              color: Colors.black26,
+                              borderRadius: BorderRadius.circular(4),
+                            ),
                           ),
                         ),
-                      ),
-                      const SizedBox(height: 14),
-                      Row(
-                        children: [
-                          const Icon(
-                            Icons.directions_bike,
-                            color: Color(0xFF4285F4),
+                        const SizedBox(height: 14),
+                        Row(
+                          children: [
+                            const Icon(
+                              Icons.directions_bike,
+                              color: Color(0xFF4285F4),
+                            ),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: Text(
+                                _routeSummary,
+                                style: Theme.of(context).textTheme.titleMedium
+                                    ?.copyWith(fontWeight: FontWeight.w700),
+                              ),
+                            ),
+                          ],
+                        ),
+                        if (_trainRouteLegs.isNotEmpty) ...[
+                          const SizedBox(height: 6),
+                          Wrap(
+                            spacing: 16,
+                            runSpacing: 4,
+                            children: [
+                              _buildRouteLegendItem(
+                                color: const Color(0xFF4285F4),
+                                label: 'Bike route',
+                              ),
+                              _buildRouteLegendItem(
+                                color: _trainLineColor,
+                                label: 'Train route',
+                              ),
+                              if (_trainRouteLegs.length > 1)
+                                _buildRouteLegendItem(
+                                  color: _transferColor,
+                                  label: 'After transfer',
+                                ),
+                            ],
                           ),
-                          const SizedBox(width: 10),
-                          Expanded(
+                        ],
+                        if (_navigationMessage.isNotEmpty) ...[
+                          const SizedBox(height: 4),
+                          Align(
+                            alignment: Alignment.centerLeft,
                             child: Text(
-                              _routeSummary,
-                              style: Theme.of(context).textTheme.titleMedium
-                                  ?.copyWith(fontWeight: FontWeight.w700),
+                              _navigationMessage,
+                              style: Theme.of(context).textTheme.labelMedium
+                                  ?.copyWith(
+                                    color: _isRecalculating
+                                        ? const Color(0xFFB05A00)
+                                        : Colors.black54,
+                                  ),
                             ),
                           ),
                         ],
-                      ),
-                      if (_trainRouteLegs.isNotEmpty) ...[
-                        const SizedBox(height: 6),
-                        Wrap(
-                          spacing: 16,
-                          runSpacing: 4,
-                          children: [
-                            _buildRouteLegendItem(
-                              color: const Color(0xFF4285F4),
-                              label: 'Bike route',
+                        if (_isNavigating && activeInstruction != null) ...[
+                          const SizedBox(height: 10),
+                          Container(
+                            width: double.infinity,
+                            padding: const EdgeInsets.all(12),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFFEAF1FF),
+                              borderRadius: BorderRadius.circular(10),
                             ),
-                            _buildRouteLegendItem(
-                              color: _trainLineColor,
-                              label: 'Train route',
-                            ),
-                            if (_trainRouteLegs.length > 1)
-                              _buildRouteLegendItem(
-                                color: _transferColor,
-                                label: 'After transfer',
-                              ),
-                          ],
-                        ),
-                      ],
-                      if (_navigationMessage.isNotEmpty) ...[
-                        const SizedBox(height: 4),
-                        Align(
-                          alignment: Alignment.centerLeft,
-                          child: Text(
-                            _navigationMessage,
-                            style: Theme.of(context).textTheme.labelMedium
-                                ?.copyWith(
-                                  color: _isRecalculating
-                                      ? const Color(0xFFB05A00)
-                                      : Colors.black54,
-                                ),
-                          ),
-                        ),
-                      ],
-                      if (_isNavigating && activeInstruction != null) ...[
-                        const SizedBox(height: 10),
-                        Container(
-                          width: double.infinity,
-                          padding: const EdgeInsets.all(12),
-                          decoration: BoxDecoration(
-                            color: const Color(0xFFEAF1FF),
-                            borderRadius: BorderRadius.circular(10),
-                          ),
-                          child: Row(
-                            children: [
-                              const Icon(
-                                Icons.turn_right,
-                                color: Color(0xFF1A73E8),
-                              ),
-                              const SizedBox(width: 10),
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text(
-                                      activeInstruction.text,
-                                      style: const TextStyle(
-                                        fontWeight: FontWeight.w700,
-                                      ),
-                                    ),
-                                    if (distanceToNextStep != null)
-                                      Text(
-                                        'Next step in ${RouteService.formatDistance(distanceToNextStep)}',
-                                        style: Theme.of(context)
-                                            .textTheme
-                                            .bodySmall,
-                                      ),
-                                  ],
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ],
-                      if (_routePoints.isNotEmpty) ...[
-                        const SizedBox(height: 10),
-                        SizedBox(
-                          width: double.infinity,
-                          child: FilledButton.icon(
-                            onPressed: _isNavigating
-                                ? _stopNavigation
-                                : _startNavigation,
-                            icon: Icon(
-                              _isNavigating ? Icons.stop : Icons.navigation,
-                            ),
-                            label: Text(
-                              _isNavigating
-                                  ? 'Stop navigation'
-                                  : 'Start navigation',
-                            ),
-                          ),
-                        ),
-                      ],
-                      if (_directions.isNotEmpty) ...[
-                        const SizedBox(height: 8),
-                        if (_directions.length - _nextDirectionIndex > 4)
-                          Align(
-                            alignment: Alignment.centerLeft,
-                            child: TextButton.icon(
-                              onPressed: () => setState(
-                                () => _showAllDirections = !_showAllDirections,
-                              ),
-                              icon: Icon(
-                                _showAllDirections
-                                    ? Icons.expand_less
-                                    : Icons.expand_more,
-                              ),
-                              label: Text(
-                                _showAllDirections
-                                    ? 'Show fewer directions'
-                                    : 'Show all ${_directions.length - _nextDirectionIndex} directions',
-                              ),
-                            ),
-                          ),
-                        for (
-                          var index = _nextDirectionIndex;
-                          index < _directions.length &&
-                              (_showAllDirections ||
-                                  index < _nextDirectionIndex + 4);
-                          index++
-                        )
-                          Padding(
-                            padding: const EdgeInsets.only(top: 5),
                             child: Row(
                               children: [
-                                Icon(
-                                  index == _nextDirectionIndex
-                                      ? Icons.arrow_forward
-                                      : Icons.turn_right,
-                                  size: 17,
-                                  color: index == _nextDirectionIndex
-                                      ? const Color(0xFF1A73E8)
-                                      : Colors.black54,
+                                const Icon(
+                                  Icons.turn_right,
+                                  color: Color(0xFF1A73E8),
                                 ),
-                                const SizedBox(width: 8),
+                                const SizedBox(width: 10),
                                 Expanded(
-                                  child: Text(
-                                    _directions[index].text,
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: TextStyle(
-                                      fontWeight: index == _nextDirectionIndex
-                                          ? FontWeight.w600
-                                          : FontWeight.normal,
-                                    ),
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        activeInstruction.text,
+                                        style: const TextStyle(
+                                          fontWeight: FontWeight.w700,
+                                        ),
+                                      ),
+                                      if (distanceToNextStep != null)
+                                        Text(
+                                          'Next step in ${RouteService.formatDistance(distanceToNextStep)}',
+                                          style: Theme.of(context)
+                                              .textTheme
+                                              .bodySmall,
+                                        ),
+                                    ],
                                   ),
-                                ),
-                                Text(
-                                  RouteService.formatDistance(
-                                    _directions[index].distanceMeters,
-                                  ),
-                                  style: Theme.of(context).textTheme.labelSmall,
                                 ),
                               ],
                             ),
                           ),
+                        ],
+                        if (_routePoints.isNotEmpty) ...[
+                          const SizedBox(height: 10),
+                          SizedBox(
+                            width: double.infinity,
+                            child: FilledButton.icon(
+                              onPressed: _isNavigating
+                                  ? _stopNavigation
+                                  : _startNavigation,
+                              icon: Icon(
+                                _isNavigating ? Icons.stop : Icons.navigation,
+                              ),
+                              label: Text(
+                                _isNavigating
+                                    ? 'Stop navigation'
+                                    : 'Start navigation',
+                              ),
+                            ),
+                          ),
+                        ],
+                        if (_directions.isNotEmpty) ...[
+                          const SizedBox(height: 8),
+                          if (_directions.length - _nextDirectionIndex > 4)
+                            Align(
+                              alignment: Alignment.centerLeft,
+                              child: TextButton.icon(
+                                onPressed: () => setState(
+                                  () =>
+                                      _showAllDirections = !_showAllDirections,
+                                ),
+                                icon: Icon(
+                                  _showAllDirections
+                                      ? Icons.expand_less
+                                      : Icons.expand_more,
+                                ),
+                                label: Text(
+                                  _showAllDirections
+                                      ? 'Show fewer directions'
+                                      : 'Show all ${_directions.length - _nextDirectionIndex} directions',
+                                ),
+                              ),
+                            ),
+                          for (
+                            var index = _nextDirectionIndex;
+                            index < _directions.length &&
+                                (_showAllDirections ||
+                                    index < _nextDirectionIndex + 4);
+                            index++
+                          )
+                            Padding(
+                              padding: const EdgeInsets.only(top: 5),
+                              child: Row(
+                                children: [
+                                  Icon(
+                                    index == _nextDirectionIndex
+                                        ? Icons.arrow_forward
+                                        : Icons.turn_right,
+                                    size: 17,
+                                    color: index == _nextDirectionIndex
+                                        ? const Color(0xFF1A73E8)
+                                        : Colors.black54,
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Expanded(
+                                    child: Text(
+                                      _directions[index].text,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: TextStyle(
+                                        fontWeight: index == _nextDirectionIndex
+                                            ? FontWeight.w600
+                                            : FontWeight.normal,
+                                      ),
+                                    ),
+                                  ),
+                                  Text(
+                                    RouteService.formatDistance(
+                                      _directions[index].distanceMeters,
+                                    ),
+                                    style: Theme.of(context)
+                                        .textTheme
+                                        .labelSmall,
+                                  ),
+                                ],
+                              ),
+                            ),
+                        ],
+                        const SizedBox(height: 10),
+                        Text(
+                          'Map data: OpenStreetMap contributors',
+                          style: Theme.of(context).textTheme.labelSmall
+                              ?.copyWith(color: Colors.black54),
+                        ),
                       ],
-                      const SizedBox(height: 10),
-                      Text(
-                        'Map data: OpenStreetMap contributors',
-                        style: Theme.of(context).textTheme.labelSmall
-                            ?.copyWith(color: Colors.black54),
-                      ),
-                    ],
+                    ),
                   ),
                 ),
               ),
             ),
-          ),
         ],
       ),
     );

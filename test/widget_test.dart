@@ -81,6 +81,10 @@ void main() {
     expect(find.byType(TextField), findsNWidgets(2));
     expect(find.byTooltip('Plan bike route'), findsOneWidget);
     expect(find.text('No trains'), findsOneWidget);
+    expect(
+      find.text('Search for a destination to plan your ride.'),
+      findsNothing,
+    );
     expect(find.text('Boarding train station'), findsNothing);
     expect(find.text('Exit train station'), findsNothing);
   });
