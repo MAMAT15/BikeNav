@@ -37,6 +37,9 @@ The app supports:
 - turn-by-turn style route guidance
 - route recalculation while navigation is active
 - the ability to avoid ferries when needed
+- optional NYC Subway routing
+
+The MTA schedule download is about 20 MB on first use and refreshes hourly. It is not a real-time feed, and published schedules may not include every service change.
 
 ### Community path tracking
 
