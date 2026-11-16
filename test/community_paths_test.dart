@@ -11,6 +11,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:bike_nav/main.dart';
 import 'package:bike_nav/screens/add_path.dart';
 import 'package:bike_nav/screens/path_service.dart';
+import 'package:bike_nav/screens/route_preferences.dart';
 
 // A path exactly as the first Add Path version saved it.
 const Map<String, dynamic> legacyPath = {
@@ -268,6 +269,34 @@ void main() {
     expect(route.points.first, start);
     expect(route.points.last, end);
     expect(route.points, contains(const LatLng(40.0, -73.99)));
+  });
+
+  test('bike preferences reach every routing request', () async {
+    final requests = <Map<String, dynamic>>[];
+    final preferences = RoutePreferences.forBike(
+      bikeType: 'Road',
+      isElectric: true,
+      electricClass: 3,
+      avoidBusyRoads: true,
+    );
+
+    final route = await http.runWithClient(
+      () => RouteService.planBikeRoute(
+        start: start,
+        end: end,
+        preferences: preferences,
+        communityPaths: [shortcut()],
+      ),
+      () => fakeValhalla(requests),
+    );
+
+    // Baseline, start to path entry, path exit to end.
+    expect(route.summary, contains('via community path'));
+    expect(requests, hasLength(3));
+    final expected = preferences.toCostingOptions(avoidFerries: false);
+    for (final request in requests) {
+      expect(request['costing_options'], {'bicycle': expected});
+    }
   });
 
   test('keeps the normal route when no verified path helps', () async {

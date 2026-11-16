@@ -88,4 +88,37 @@ void main() {
     expect(find.text('Boarding train station'), findsNothing);
     expect(find.text('Exit train station'), findsNothing);
   });
+
+  testWidgets('shows route choices and the bike being routed for', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({});
+    await AuthService.saveAccount(
+      const Account(
+        fullName: 'Test Rider',
+        email: 'rider@example.com',
+        password: 'secure123',
+        bikeProfile: BikeProfile(
+          name: 'Commuter',
+          type: 'Road',
+          isElectric: false,
+        ),
+      ),
+    );
+    tester.view.physicalSize = const Size(780, 1200);
+    tester.view.devicePixelRatio = 2;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await tester.pumpWidget(
+      const MaterialApp(home: MapScreen(userEmail: 'rider@example.com')),
+    );
+    await tester.pump();
+    await tester.pump();
+
+    expect(find.text('Avoid busy roads'), findsOneWidget);
+    expect(find.text('Avoid hills'), findsOneWidget);
+    expect(find.text('Shortest'), findsOneWidget);
+    expect(find.text('Routing for Commuter (Road)'), findsOneWidget);
+  });
 }
