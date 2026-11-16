@@ -14,6 +14,7 @@ import 'screens/add_path.dart';
 import 'screens/community_paths.dart';
 import 'screens/mta_subway_service.dart';
 import 'screens/path_service.dart';
+import 'screens/route_preferences.dart';
 
 void main() {
   runApp(const BikeNavApp());
@@ -750,6 +751,10 @@ class _MapScreenState extends State<MapScreen> {
   bool _isRecalculating = false;
   bool _showNavigationPanel = false;
   bool _avoidFerries = false;
+  bool _avoidBusyRoads = false;
+  bool _avoidHills = false;
+  bool _shortest = false;
+  BikeProfile? _bikeProfile;
   bool _includeTrains = false;
   bool _routeUsesTrain = false;
   bool _showAllDirections = false;
@@ -760,6 +765,7 @@ class _MapScreenState extends State<MapScreen> {
   void initState() {
     super.initState();
     _loadCommunityPaths();
+    _loadBikeProfile();
   }
 
   Future<void> _loadCommunityPaths() async {
@@ -770,6 +776,48 @@ class _MapScreenState extends State<MapScreen> {
     } catch (_) {
       // The map still works without the community path overlay.
     }
+  }
+
+  Future<void> _loadBikeProfile() async {
+    try {
+      final account = await AuthService.findAccount(widget.userEmail);
+      if (!mounted) return;
+      setState(() => _bikeProfile = account?.bikeProfile);
+    } catch (_) {
+      // Routing falls back to a standard city bike without a profile.
+    }
+  }
+
+  // The rider's bike and route choices, sent with every routing request.
+  RoutePreferences get _routePreferences => RoutePreferences.forBike(
+    bikeType: _bikeProfile?.type,
+    isElectric: _bikeProfile?.isElectric ?? false,
+    electricClass: _bikeProfile?.electricClass,
+    avoidBusyRoads: _avoidBusyRoads,
+    avoidHills: _avoidHills,
+    shortest: _shortest,
+  );
+
+  // A route option chip. Changing it re-plans the trip, like Avoid ferries.
+  Widget _routePreferenceChip({
+    required IconData icon,
+    required String label,
+    required bool selected,
+    required ValueChanged<bool> onChanged,
+  }) {
+    return FilterChip(
+      avatar: Icon(icon, size: 18),
+      label: Text(label),
+      selected: selected,
+      onSelected: _isNavigating || _isLoading
+          ? null
+          : (value) {
+              setState(() => onChanged(value));
+              if (_destinationController.text.trim().isNotEmpty) {
+                _planRoute();
+              }
+            },
+    );
   }
 
   @override
@@ -952,12 +1000,14 @@ class _MapScreenState extends State<MapScreen> {
           boardingStation: stations.boarding,
           exitStation: stations.exit,
           avoidFerries: _avoidFerries,
+          preferences: _routePreferences,
         );
       } else {
         route = await RouteService.planBikeRoute(
           start: start,
           end: end,
           avoidFerries: _avoidFerries,
+          preferences: _routePreferences,
         );
       }
 
@@ -1116,6 +1166,7 @@ class _MapScreenState extends State<MapScreen> {
         start: location,
         end: destination,
         avoidFerries: _avoidFerries,
+        preferences: _routePreferences,
       );
     } catch (_) {
       errorMessage = 'Could not update route. Staying on the current route.';
@@ -1441,6 +1492,7 @@ class _MapScreenState extends State<MapScreen> {
                                       ),
                                     ),
                                   );
+                                  await _loadBikeProfile();
                                   return;
                                 }
                                 final navigator = Navigator.of(context);
@@ -1624,7 +1676,43 @@ class _MapScreenState extends State<MapScreen> {
                                         }
                                       },
                               ),
+                              _routePreferenceChip(
+                                icon: Icons.traffic,
+                                label: 'Avoid busy roads',
+                                selected: _avoidBusyRoads,
+                                onChanged: (value) => _avoidBusyRoads = value,
+                              ),
+                              _routePreferenceChip(
+                                icon: Icons.landscape,
+                                label: 'Avoid hills',
+                                selected: _avoidHills,
+                                onChanged: (value) => _avoidHills = value,
+                              ),
+                              _routePreferenceChip(
+                                icon: Icons.straighten,
+                                label: 'Shortest',
+                                selected: _shortest,
+                                onChanged: (value) => _shortest = value,
+                              ),
                             ],
+                          ),
+                        ),
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(8, 2, 8, 6),
+                          child: Align(
+                            alignment: Alignment.centerLeft,
+                            child: Text(
+                              _bikeProfile == null
+                                  ? 'No bike profile yet: routing for a '
+                                        'standard city bike.'
+                                  : 'Routing for ${_bikeProfile!.name}'
+                                        ' (${_bikeProfile!.type}'
+                                        '${_bikeProfile!.isElectric ? ', e-bike' : ''})',
+                              style: const TextStyle(
+                                fontSize: 12,
+                                color: Colors.black54,
+                              ),
+                            ),
                           ),
                         ),
                         if (_includeTrains) ...[
@@ -2078,12 +2166,18 @@ class RouteService {
     required LatLng start,
     required LatLng end,
     bool avoidFerries = false,
+    RoutePreferences preferences = const RoutePreferences(),
   }) async {
     final response = await http.post(
       Uri.https('valhalla1.openstreetmap.de', '/route'),
       headers: const {'Content-Type': 'application/json'},
       body: jsonEncode(
-        requestBody(start: start, end: end, avoidFerries: avoidFerries),
+        requestBody(
+          start: start,
+          end: end,
+          avoidFerries: avoidFerries,
+          preferences: preferences,
+        ),
       ),
     );
     if (response.statusCode != 200) {
@@ -2106,12 +2200,14 @@ class RouteService {
     required LatLng start,
     required LatLng end,
     bool avoidFerries = false,
+    RoutePreferences preferences = const RoutePreferences(),
     List<CommunityPath>? communityPaths,
   }) async {
     final baseline = await fetchBikeRoute(
       start: start,
       end: end,
       avoidFerries: avoidFerries,
+      preferences: preferences,
     );
 
     List<PathCandidate> candidates;
@@ -2134,6 +2230,7 @@ class RouteService {
           end: end,
           candidate: candidate,
           avoidFerries: avoidFerries,
+          preferences: preferences,
         );
         if (stitched.durationSeconds < best.durationSeconds) best = stitched;
       } catch (_) {
@@ -2152,16 +2249,19 @@ class RouteService {
     required MtaStation boardingStation,
     required MtaStation exitStation,
     bool avoidFerries = false,
+    RoutePreferences preferences = const RoutePreferences(),
   }) async {
     final toBoarding = await planBikeRoute(
       start: start,
       end: boardingStation.point,
       avoidFerries: avoidFerries,
+      preferences: preferences,
     );
     final fromExit = await planBikeRoute(
       start: exitStation.point,
       end: end,
       avoidFerries: avoidFerries,
+      preferences: preferences,
     );
 
     var boardingDirections = toBoarding.directions;
@@ -2256,6 +2356,7 @@ class RouteService {
     required LatLng end,
     required PathCandidate candidate,
     bool avoidFerries = false,
+    RoutePreferences preferences = const RoutePreferences(),
   }) async {
     final entry = candidate.entry;
     final exit = candidate.exit;
@@ -2267,6 +2368,7 @@ class RouteService {
             start: start,
             end: entry,
             avoidFerries: avoidFerries,
+            preferences: preferences,
           )
         : null;
     final tail = PathService.metersBetween(exit, end) > 20
@@ -2274,6 +2376,7 @@ class RouteService {
             start: exit,
             end: end,
             avoidFerries: avoidFerries,
+            preferences: preferences,
           )
         : null;
 
@@ -2318,6 +2421,7 @@ class RouteService {
     required LatLng start,
     required LatLng end,
     required bool avoidFerries,
+    RoutePreferences preferences = const RoutePreferences(),
   }) {
     return {
       'locations': [
@@ -2325,10 +2429,11 @@ class RouteService {
         {'lat': end.latitude, 'lon': end.longitude},
       ],
       'costing': 'bicycle',
-      if (avoidFerries)
-        'costing_options': {
-          'bicycle': {'use_ferry': 0},
-        },
+      // Always sent so the rider's bike and route choices reach Valhalla.
+      // With no profile and no choices this is just Valhalla's defaults.
+      'costing_options': {
+        'bicycle': preferences.toCostingOptions(avoidFerries: avoidFerries),
+      },
       'units': 'kilometers',
       'shape_format': 'polyline6',
     };
