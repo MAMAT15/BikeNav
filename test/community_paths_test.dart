@@ -205,21 +205,16 @@ void main() {
     expect(PathService.validateReachesEnd(const [], destination), isNotNull);
   });
 
-  testWidgets('submit is disabled until a route is recorded and stopped', (
+  testWidgets('submit step is hidden until a valid route is recorded', (
     tester,
   ) async {
     await tester.pumpWidget(
       const MaterialApp(home: AddPathScreen(userEmail: 'rider@example.com')),
     );
 
-    final submit = tester.widget<ElevatedButton>(
-      find.widgetWithText(ElevatedButton, 'Submit Path'),
-    );
-    expect(submit.onPressed, isNull);
-    expect(
-      find.text('Record a route and stop recording to submit it.'),
-      findsOneWidget,
-    );
+    // The submit step stays hidden until a valid route is recorded.
+    expect(find.text('4. Submit for Review'), findsNothing);
+    expect(find.text('Submit Path'), findsNothing);
   });
 
   test('skips paths that are a long way off the trip', () {
