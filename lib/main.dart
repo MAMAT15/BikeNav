@@ -986,29 +986,41 @@ class _MapScreenState extends State<MapScreen> {
             );
       final mtaData = useTrains ? await _loadMtaSubwayData() : null;
       final trainStations = mtaData?.nearestStationPair(start: start, end: end);
-      late final RouteResult route;
+      final bikeRoute = await RouteService.planBikeRoute(
+        start: start,
+        end: end,
+        avoidFerries: _avoidFerries,
+        preferences: _routePreferences,
+      );
+      var route = bikeRoute;
+      String? notice;
       if (useTrains) {
-        final data = mtaData;
-        final stations = trainStations;
-        if (data == null || stations == null) {
-          throw StateError('MTA stations were not loaded.');
+        // A train trip that cannot be planned falls back to riding.
+        RouteResult? trainRoute;
+        try {
+          final data = mtaData;
+          final stations = trainStations;
+          if (data != null && stations != null) {
+            trainRoute = await RouteService.planBikeTrainRoute(
+              start: start,
+              end: end,
+              mtaData: data,
+              boardingStation: stations.boarding,
+              exitStation: stations.exit,
+              avoidFerries: _avoidFerries,
+              preferences: _routePreferences,
+            );
+          }
+        } catch (_) {
+          trainRoute = null;
         }
-        route = await RouteService.planBikeTrainRoute(
-          start: start,
-          end: end,
-          mtaData: data,
-          boardingStation: stations.boarding,
-          exitStation: stations.exit,
-          avoidFerries: _avoidFerries,
+        final choice = RouteService.chooseTripRoute(
+          bikeRoute: bikeRoute,
+          trainRoute: trainRoute,
           preferences: _routePreferences,
         );
-      } else {
-        route = await RouteService.planBikeRoute(
-          start: start,
-          end: end,
-          avoidFerries: _avoidFerries,
-          preferences: _routePreferences,
-        );
+        route = choice.route;
+        notice = choice.notice;
       }
 
       if (!mounted) return;
@@ -1022,11 +1034,11 @@ class _MapScreenState extends State<MapScreen> {
         _trainRouteLegs = route.trainLegs;
         _directions = route.directions;
         _routeSummary = route.summary;
-        _routeUsesTrain = useTrains;
+        _routeUsesTrain = route.trainLegs.isNotEmpty;
         _trainRouteStations = route.trainStations;
         _nextDirectionIndex = 0;
         _showAllDirections = false;
-        _navigationMessage = '';
+        _navigationMessage = notice ?? '';
         _isLoading = false;
         _showNavigationPanel = true;
       });
@@ -1697,6 +1709,20 @@ class _MapScreenState extends State<MapScreen> {
                             ],
                           ),
                         ),
+                        if (_shortest)
+                          const Padding(
+                            padding: EdgeInsets.fromLTRB(8, 2, 8, 0),
+                            child: Align(
+                              alignment: Alignment.centerLeft,
+                              child: Text(
+                                'Shortest ignores busy-road and hill preferences.',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: Colors.black54,
+                                ),
+                              ),
+                            ),
+                          ),
                         Padding(
                           padding: const EdgeInsets.fromLTRB(8, 2, 8, 6),
                           child: Align(
@@ -2191,11 +2217,47 @@ class RouteService {
   }
 
   // At most this many community paths are tried per trip, to keep the
-  // number of requests to the routing server small.
+  // number of requests to the routing server small. With Shortest on a few
+  // more are tried, since a shorter path may rank lower on the rough estimate.
   static const int maxCommunityCandidates = 2;
+  static const int maxShortestCandidates = 4;
+
+  // True when route a beats route b for what the rider asked for:
+  // distance with Shortest on, otherwise travel time.
+  static bool isBetter(
+    RouteResult a,
+    RouteResult b,
+    RoutePreferences preferences,
+  ) => preferences.shortest
+      ? a.distanceMeters < b.distanceMeters
+      : a.durationSeconds < b.durationSeconds;
+
+  // With trains on: keeps the train trip only when it beats riding the whole
+  // way (less riding with Shortest on, otherwise sooner arrival). Otherwise
+  // returns the bike-only route and a notice saying why. A tie keeps the
+  // bike route, the simpler trip.
+  static ({RouteResult route, String? notice}) chooseTripRoute({
+    required RouteResult bikeRoute,
+    RouteResult? trainRoute,
+    required RoutePreferences preferences,
+  }) {
+    if (trainRoute != null && isBetter(trainRoute, bikeRoute, preferences)) {
+      return (route: trainRoute, notice: null);
+    }
+    final kind = preferences.shortest ? 'shortest' : 'fastest';
+    final reason = trainRoute == null
+        ? 'No train route exists for this trip.'
+        : 'No train route is ${preferences.shortest ? 'shorter' : 'faster'} '
+              'than riding all the way.';
+    return (
+      route: bikeRoute,
+      notice: '$reason Showing the $kind bike route without a train.',
+    );
+  }
 
   // Plans a bike route, going via a verified community path when that is
-  // faster than the normal route. Falls back to the normal route otherwise.
+  // better for the rider's choice: shorter with Shortest on, otherwise
+  // faster. Falls back to the normal route otherwise.
   static Future<RouteResult> planBikeRoute({
     required LatLng start,
     required LatLng end,
@@ -2223,7 +2285,10 @@ class RouteService {
     }
 
     var best = baseline;
-    for (final candidate in candidates.take(maxCommunityCandidates)) {
+    final limit = preferences.shortest
+        ? maxShortestCandidates
+        : maxCommunityCandidates;
+    for (final candidate in candidates.take(limit)) {
       try {
         final stitched = await stitchCommunityPath(
           start: start,
@@ -2232,7 +2297,7 @@ class RouteService {
           avoidFerries: avoidFerries,
           preferences: preferences,
         );
-        if (stitched.durationSeconds < best.durationSeconds) best = stitched;
+        if (isBetter(stitched, best, preferences)) best = stitched;
       } catch (_) {
         // This path could not be connected. Keep the best route so far.
       }

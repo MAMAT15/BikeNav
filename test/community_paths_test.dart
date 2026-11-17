@@ -10,6 +10,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:bike_nav/main.dart';
 import 'package:bike_nav/screens/add_path.dart';
+import 'package:bike_nav/screens/mta_subway_service.dart';
 import 'package:bike_nav/screens/path_service.dart';
 import 'package:bike_nav/screens/route_preferences.dart';
 
@@ -31,28 +32,36 @@ const Map<String, dynamic> legacyPath = {
   ],
 };
 
-CommunityPath shortcut({String status = PathService.statusVerified}) {
+CommunityPath shortcut({
+  String status = PathService.statusVerified,
+  String id = 'shortcut',
+  double durationSeconds = 200,
+}) {
   const points = [
     TrackPoint(point: LatLng(40.0, -73.998)),
     TrackPoint(point: LatLng(40.0, -73.99)),
     TrackPoint(point: LatLng(40.0, -73.982)),
   ];
   return CommunityPath(
-    id: 'shortcut',
+    id: id,
     submitter: 'rider@example.com',
     startName: 'West gate',
     endName: 'East gate',
     points: points,
     lengthMeters: PathService.trackLength(points.map((p) => p.point).toList()),
-    durationSeconds: 200,
+    durationSeconds: durationSeconds,
     date: '2026-11-01 10:00:00.000000',
     status: status,
   );
 }
 
 // Stands in for Valhalla: a straight line between the two locations,
-// ridden at 4 m/s.
-MockClient fakeValhalla(List<Map<String, dynamic>> requests) {
+// ridden at 4 m/s. A roadFactor above 1 makes roads wind, so a straight
+// community path can cut the trip short.
+MockClient fakeValhalla(
+  List<Map<String, dynamic>> requests, {
+  double roadFactor = 1.0,
+}) {
   return MockClient((request) async {
     final body = jsonDecode(request.body) as Map<String, dynamic>;
     requests.add(body);
@@ -65,7 +74,7 @@ MockClient fakeValhalla(List<Map<String, dynamic>> requests) {
       (locations[1]['lat'] as num).toDouble(),
       (locations[1]['lon'] as num).toDouble(),
     );
-    final meters = PathService.metersBetween(from, to);
+    final meters = PathService.metersBetween(from, to) * roadFactor;
     return http.Response(
       jsonEncode({
         'trip': {
@@ -292,6 +301,161 @@ void main() {
     for (final request in requests) {
       expect(request['costing_options'], {'bicycle': expected});
     }
+  });
+
+  test('Shortest picks a shorter but slower community path', () async {
+    // Roads wind, so the straight path is shorter, but its recorded ride
+    // was slow, so it is not faster.
+    final slowPath = shortcut(durationSeconds: 900);
+
+    Future<RouteResult> plan(RoutePreferences preferences) {
+      return http.runWithClient(
+        () => RouteService.planBikeRoute(
+          start: start,
+          end: end,
+          preferences: preferences,
+          communityPaths: [slowPath],
+        ),
+        () => fakeValhalla([], roadFactor: 1.25),
+      );
+    }
+
+    final baselineMeters = PathService.metersBetween(start, end) * 1.25;
+
+    final shortest = await plan(RoutePreferences.forBike(shortest: true));
+    expect(shortest.summary, contains('via community path'));
+    expect(shortest.distanceMeters, lessThan(baselineMeters));
+
+    final fastest = await plan(const RoutePreferences());
+    expect(fastest.summary, isNot(contains('via community path')));
+    expect(fastest.distanceMeters, closeTo(baselineMeters, 1));
+  });
+
+  test('Shortest tries more community paths', () async {
+    final paths = [
+      for (var index = 0; index < 3; index++) shortcut(id: 'shortcut-$index'),
+    ];
+
+    Future<int> requestCount(RoutePreferences preferences) async {
+      final requests = <Map<String, dynamic>>[];
+      await http.runWithClient(
+        () => RouteService.planBikeRoute(
+          start: start,
+          end: end,
+          preferences: preferences,
+          communityPaths: paths,
+        ),
+        () => fakeValhalla(requests),
+      );
+      return requests.length;
+    }
+
+    // Baseline, plus two legs for each path tried.
+    expect(await requestCount(const RoutePreferences()), 1 + 2 * 2);
+    expect(
+      await requestCount(RoutePreferences.forBike(shortest: true)),
+      1 + 3 * 2,
+    );
+  });
+
+  group('trains vs riding all the way', () {
+    RouteResult route({
+      required double meters,
+      required double seconds,
+      bool train = false,
+    }) {
+      return RouteResult(
+        points: const [start, end],
+        summary: train ? 'train trip' : 'bike trip',
+        directions: const [],
+        distanceMeters: meters,
+        durationSeconds: seconds,
+        trainLegs: [
+          if (train)
+            MtaTrainLeg(
+              fromStationId: 'A',
+              toStationId: 'B',
+              route: '1',
+              headsign: 'Bravo',
+              fromStation: 'Alpha',
+              toStation: 'Bravo',
+              departure: DateTime(2026, 11, 16, 10),
+              arrival: DateTime(2026, 11, 16, 10, 10),
+              pathPoints: const [start, end],
+            ),
+        ],
+      );
+    }
+
+    final shortest = RoutePreferences.forBike(shortest: true);
+    const fastest = RoutePreferences();
+
+    test('Shortest keeps a train trip with less riding, even if slower', () {
+      final train = route(meters: 800, seconds: 1500, train: true);
+      final choice = RouteService.chooseTripRoute(
+        bikeRoute: route(meters: 4000, seconds: 1000),
+        trainRoute: train,
+        preferences: shortest,
+      );
+      expect(choice.route, same(train));
+      expect(choice.notice, isNull);
+    });
+
+    test('Shortest rides all the way when that is less riding', () {
+      final bike = route(meters: 1500, seconds: 400);
+      final choice = RouteService.chooseTripRoute(
+        bikeRoute: bike,
+        trainRoute: route(meters: 1800, seconds: 900, train: true),
+        preferences: shortest,
+      );
+      expect(choice.route, same(bike));
+      expect(choice.notice, contains('No train route is shorter'));
+      expect(choice.notice, contains('shortest bike route'));
+    });
+
+    test('without Shortest, the sooner arrival wins', () {
+      final bike = route(meters: 4000, seconds: 1000);
+      final train = route(meters: 800, seconds: 1500, train: true);
+
+      final slowTrain = RouteService.chooseTripRoute(
+        bikeRoute: bike,
+        trainRoute: train,
+        preferences: fastest,
+      );
+      expect(slowTrain.route, same(bike));
+      expect(slowTrain.notice, contains('No train route is faster'));
+      expect(slowTrain.notice, contains('fastest bike route'));
+
+      final fastTrain = route(meters: 800, seconds: 600, train: true);
+      final choice = RouteService.chooseTripRoute(
+        bikeRoute: bike,
+        trainRoute: fastTrain,
+        preferences: fastest,
+      );
+      expect(choice.route, same(fastTrain));
+      expect(choice.notice, isNull);
+    });
+
+    test('rides all the way when no train trip exists', () {
+      final bike = route(meters: 1500, seconds: 400);
+      final choice = RouteService.chooseTripRoute(
+        bikeRoute: bike,
+        preferences: shortest,
+      );
+      expect(choice.route, same(bike));
+      expect(choice.notice, contains('No train route exists'));
+      expect(choice.notice, contains('shortest bike route without a train'));
+    });
+
+    test('a tie keeps the bike route', () {
+      final bike = route(meters: 1500, seconds: 400);
+      final choice = RouteService.chooseTripRoute(
+        bikeRoute: bike,
+        trainRoute: route(meters: 1500, seconds: 400, train: true),
+        preferences: shortest,
+      );
+      expect(choice.route, same(bike));
+    });
   });
 
   test('keeps the normal route when no verified path helps', () async {
