@@ -57,10 +57,12 @@ CommunityPath shortcut({
 
 // Stands in for Valhalla: a straight line between the two locations,
 // ridden at 4 m/s. A roadFactor above 1 makes roads wind, so a straight
-// community path can cut the trip short.
+// community path can cut the trip short. hasFerry decides, per request,
+// whether the returned route takes a ferry.
 MockClient fakeValhalla(
   List<Map<String, dynamic>> requests, {
   double roadFactor = 1.0,
+  bool Function(Map<String, dynamic> body)? hasFerry,
 }) {
   return MockClient((request) async {
     final body = jsonDecode(request.body) as Map<String, dynamic>;
@@ -78,7 +80,11 @@ MockClient fakeValhalla(
     return http.Response(
       jsonEncode({
         'trip': {
-          'summary': {'length': meters / 1000, 'time': meters / 4},
+          'summary': {
+            'length': meters / 1000,
+            'time': meters / 4,
+            'has_ferry': hasFerry?.call(body) ?? false,
+          },
           'legs': [
             {
               'shape': encodePolyline([
@@ -358,6 +364,74 @@ void main() {
     );
   });
 
+  group('Avoid ferries with Shortest on', () {
+    bool asksShortest(Map<String, dynamic> body) {
+      final options = body['costing_options'] as Map<String, dynamic>;
+      final bicycle = options['bicycle'] as Map<String, dynamic>;
+      return bicycle['shortest'] == true;
+    }
+
+    Future<RouteResult> plan(
+      List<Map<String, dynamic>> requests, {
+      required bool shortest,
+      required bool Function(Map<String, dynamic> body) hasFerry,
+    }) {
+      return http.runWithClient(
+        () => RouteService.planBikeRoute(
+          start: start,
+          end: end,
+          avoidFerries: true,
+          preferences: RoutePreferences.forBike(shortest: shortest),
+          communityPaths: const [],
+        ),
+        () => fakeValhalla(requests, hasFerry: hasFerry),
+      );
+    }
+
+    test('plans again without Shortest when Shortest takes a ferry', () async {
+      final requests = <Map<String, dynamic>>[];
+      // Like Valhalla: Shortest ignores use_ferry, ranking by time does not.
+      final route = await plan(
+        requests,
+        shortest: true,
+        hasFerry: asksShortest,
+      );
+
+      expect(route.points, isNotEmpty);
+      expect(route.notice, RouteService.shortestFerryNotice);
+      expect(requests, hasLength(2));
+      expect(asksShortest(requests.first), isTrue);
+      expect(asksShortest(requests.last), isFalse);
+      final options = requests.last['costing_options'] as Map<String, dynamic>;
+      expect((options['bicycle'] as Map)['use_ferry'], 0);
+    });
+
+    test('reports no ferry-free route when there is none', () async {
+      final requests = <Map<String, dynamic>>[];
+      await expectLater(
+        plan(requests, shortest: true, hasFerry: (_) => true),
+        throwsA(isA<FerryRouteException>()),
+      );
+      expect(requests, hasLength(2));
+    });
+
+    test('does not retry when Shortest is off', () async {
+      final requests = <Map<String, dynamic>>[];
+      await expectLater(
+        plan(requests, shortest: false, hasFerry: (_) => true),
+        throwsA(isA<FerryRouteException>()),
+      );
+      expect(requests, hasLength(1));
+    });
+
+    test('the error reads as plain text', () {
+      expect(
+        const FerryRouteException().toString(),
+        'No ferry-free bike route is available for this trip.',
+      );
+    });
+  });
+
   group('trains vs riding all the way', () {
     RouteResult route({
       required double meters,
@@ -445,6 +519,17 @@ void main() {
       expect(choice.route, same(bike));
       expect(choice.notice, contains('No train route exists'));
       expect(choice.notice, contains('shortest bike route without a train'));
+    });
+
+    test('keeps the train trip when riding all the way failed', () {
+      final train = route(meters: 1800, seconds: 900, train: true);
+      final choice = RouteService.chooseTripRoute(
+        bikeRoute: null,
+        trainRoute: train,
+        preferences: shortest,
+      );
+      expect(choice.route, same(train));
+      expect(choice.notice, isNull);
     });
 
     test('a tie keeps the bike route', () {

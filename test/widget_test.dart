@@ -122,7 +122,9 @@ void main() {
     expect(find.text('Routing for Commuter (Road)'), findsOneWidget);
 
     // Shortest explains what it gives up, only while it is on.
-    const note = 'Shortest ignores busy-road and hill preferences.';
+    const note =
+        'Shortest ignores busy-road and hill preferences, and may not avoid '
+        'ferries.';
     expect(find.text(note), findsNothing);
     await tester.ensureVisible(find.text('Shortest'));
     await tester.tap(find.text('Shortest'));
