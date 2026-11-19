@@ -95,6 +95,16 @@ class RoutePreferences {
     return speed?.clamp(minSpeedKph, maxSpeedKph).toDouble();
   }
 
+  /// The same choices with Shortest off, so Valhalla ranks by time again
+  /// and honours the other preferences (including avoiding ferries).
+  RoutePreferences withoutShortest() => RoutePreferences(
+    bicycleType: bicycleType,
+    cyclingSpeedKph: cyclingSpeedKph,
+    isElectric: isElectric,
+    avoidBusyRoads: avoidBusyRoads,
+    avoidHills: avoidHills,
+  );
+
   /// The "bicycle" entry of Valhalla's `costing_options`.
   Map<String, dynamic> toCostingOptions({required bool avoidFerries}) => {
     'bicycle_type': bicycleType,

@@ -986,47 +986,77 @@ class _MapScreenState extends State<MapScreen> {
             );
       final mtaData = useTrains ? await _loadMtaSubwayData() : null;
       final trainStations = mtaData?.nearestStationPair(start: start, end: end);
-      late final RouteResult route;
-      if (useTrains) {
-        final data = mtaData;
-        final stations = trainStations;
-        if (data == null || stations == null) {
-          throw StateError('MTA stations were not loaded.');
-        }
-        route = await RouteService.planBikeTrainRoute(
-          start: start,
-          end: end,
-          mtaData: data,
-          boardingStation: stations.boarding,
-          exitStation: stations.exit,
-          avoidFerries: _avoidFerries,
-          preferences: _routePreferences,
-        );
-      } else {
-        route = await RouteService.planBikeRoute(
+      // With trains on, a bike-only route that cannot be planned should not
+      // rule out a train trip, so its error is kept until both are tried.
+      RouteResult? bikeRoute;
+      Object? bikeError;
+      try {
+        bikeRoute = await RouteService.planBikeRoute(
           start: start,
           end: end,
           avoidFerries: _avoidFerries,
           preferences: _routePreferences,
         );
+      } catch (error) {
+        if (!useTrains) rethrow;
+        bikeError = error;
       }
+      RouteResult? route = bikeRoute;
+      String? notice;
+      if (useTrains) {
+        // A train trip that cannot be planned falls back to riding.
+        RouteResult? trainRoute;
+        try {
+          final data = mtaData;
+          final stations = trainStations;
+          if (data != null && stations != null) {
+            trainRoute = await RouteService.planBikeTrainRoute(
+              start: start,
+              end: end,
+              mtaData: data,
+              boardingStation: stations.boarding,
+              exitStation: stations.exit,
+              avoidFerries: _avoidFerries,
+              preferences: _routePreferences,
+            );
+          }
+        } catch (_) {
+          trainRoute = null;
+        }
+        if (bikeRoute == null && trainRoute == null) {
+          throw bikeError ?? Exception('No bike route was returned.');
+        }
+        final choice = RouteService.chooseTripRoute(
+          bikeRoute: bikeRoute,
+          trainRoute: trainRoute,
+          preferences: _routePreferences,
+        );
+        route = choice.route;
+        notice = choice.notice;
+      }
+      if (route == null) throw Exception('No bike route was returned.');
+      final plannedRoute = route;
+      final message = [
+        plannedRoute.notice,
+        notice,
+      ].whereType<String>().join(' ');
 
       if (!mounted) return;
       setState(() {
         _routeStart = start;
         _routeEnd = end;
-        _routePoints = route.points;
-        _routeSegments = route.segments.isEmpty
-            ? [route.points]
-            : route.segments;
-        _trainRouteLegs = route.trainLegs;
-        _directions = route.directions;
-        _routeSummary = route.summary;
-        _routeUsesTrain = useTrains;
-        _trainRouteStations = route.trainStations;
+        _routePoints = plannedRoute.points;
+        _routeSegments = plannedRoute.segments.isEmpty
+            ? [plannedRoute.points]
+            : plannedRoute.segments;
+        _trainRouteLegs = plannedRoute.trainLegs;
+        _directions = plannedRoute.directions;
+        _routeSummary = plannedRoute.summary;
+        _routeUsesTrain = plannedRoute.trainLegs.isNotEmpty;
+        _trainRouteStations = plannedRoute.trainStations;
         _nextDirectionIndex = 0;
         _showAllDirections = false;
-        _navigationMessage = '';
+        _navigationMessage = message;
         _isLoading = false;
         _showNavigationPanel = true;
       });
@@ -1040,8 +1070,9 @@ class _MapScreenState extends State<MapScreen> {
       );
     } catch (error) {
       if (!mounted) return;
+      final message = error.toString().replaceFirst('Exception: ', '');
       setState(() {
-        _routeSummary = error.toString().replaceFirst('Exception: ', '');
+        _routeSummary = message;
         _routePoints = const [];
         _routeSegments = const [];
         _trainRouteLegs = const [];
@@ -1052,6 +1083,10 @@ class _MapScreenState extends State<MapScreen> {
         _isLoading = false;
         _showNavigationPanel = false;
       });
+      // The summary is only drawn inside the route panel, which is hidden
+      // now, so the error is shown here instead.
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(message)));
     }
   }
 
@@ -1186,7 +1221,7 @@ class _MapScreenState extends State<MapScreen> {
         _trainRouteStations = const [];
         _nextDirectionIndex = 0;
         _showAllDirections = false;
-        _navigationMessage = 'Route updated';
+        _navigationMessage = result.notice ?? 'Route updated';
       } else if (errorMessage != null) {
         _navigationMessage = errorMessage;
       }
@@ -1697,6 +1732,21 @@ class _MapScreenState extends State<MapScreen> {
                             ],
                           ),
                         ),
+                        if (_shortest)
+                          const Padding(
+                            padding: EdgeInsets.fromLTRB(8, 2, 8, 0),
+                            child: Align(
+                              alignment: Alignment.centerLeft,
+                              child: Text(
+                                'Shortest ignores busy-road and hill '
+                                'preferences, and may not avoid ferries.',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: Colors.black54,
+                                ),
+                              ),
+                            ),
+                          ),
                         Padding(
                           padding: const EdgeInsets.fromLTRB(8, 2, 8, 6),
                           child: Align(
@@ -2191,11 +2241,62 @@ class RouteService {
   }
 
   // At most this many community paths are tried per trip, to keep the
-  // number of requests to the routing server small.
+  // number of requests to the routing server small. With Shortest on a few
+  // more are tried, since a shorter path may rank lower on the rough estimate.
   static const int maxCommunityCandidates = 2;
+  static const int maxShortestCandidates = 4;
+
+  // True when route a beats route b for what the rider asked for:
+  // distance with Shortest on, otherwise travel time.
+  static bool isBetter(
+    RouteResult a,
+    RouteResult b,
+    RoutePreferences preferences,
+  ) => preferences.shortest
+      ? a.distanceMeters < b.distanceMeters
+      : a.durationSeconds < b.durationSeconds;
+
+  // With trains on: keeps the train trip only when it beats riding the whole
+  // way (less riding with Shortest on, otherwise sooner arrival). Otherwise
+  // returns the bike-only route and a notice saying why. A tie keeps the
+  // bike route, the simpler trip.
+  // When the bike-only route could not be planned, the train trip is kept.
+  static ({RouteResult route, String? notice}) chooseTripRoute({
+    required RouteResult? bikeRoute,
+    RouteResult? trainRoute,
+    required RoutePreferences preferences,
+  }) {
+    if (bikeRoute == null) {
+      if (trainRoute == null) {
+        throw ArgumentError('A bike or train route is needed.');
+      }
+      return (route: trainRoute, notice: null);
+    }
+    if (trainRoute != null && isBetter(trainRoute, bikeRoute, preferences)) {
+      return (route: trainRoute, notice: null);
+    }
+    final kind = preferences.shortest ? 'shortest' : 'fastest';
+    final reason = trainRoute == null
+        ? 'No train route exists for this trip.'
+        : 'No train route is ${preferences.shortest ? 'shorter' : 'faster'} '
+              'than riding all the way.';
+    return (
+      route: bikeRoute,
+      notice: '$reason Showing the $kind bike route without a train.',
+    );
+  }
+
+  static const String shortestFerryNotice =
+      "Shortest can't avoid ferries on this trip. "
+      'Showing a ferry-free route instead.';
 
   // Plans a bike route, going via a verified community path when that is
-  // faster than the normal route. Falls back to the normal route otherwise.
+  // better for the rider's choice: shorter with Shortest on, otherwise
+  // faster. Falls back to the normal route otherwise.
+  //
+  // Valhalla's Shortest ranks by distance alone and ignores the ferry
+  // setting, so with both on it can take a ferry even when a ferry-free
+  // route exists. The trip is then planned again without Shortest.
   static Future<RouteResult> planBikeRoute({
     required LatLng start,
     required LatLng end,
@@ -2203,12 +2304,25 @@ class RouteService {
     RoutePreferences preferences = const RoutePreferences(),
     List<CommunityPath>? communityPaths,
   }) async {
-    final baseline = await fetchBikeRoute(
-      start: start,
-      end: end,
-      avoidFerries: avoidFerries,
-      preferences: preferences,
-    );
+    final RouteResult baseline;
+    try {
+      baseline = await fetchBikeRoute(
+        start: start,
+        end: end,
+        avoidFerries: avoidFerries,
+        preferences: preferences,
+      );
+    } on FerryRouteException {
+      if (!avoidFerries || !preferences.shortest) rethrow;
+      final ferryFree = await planBikeRoute(
+        start: start,
+        end: end,
+        avoidFerries: avoidFerries,
+        preferences: preferences.withoutShortest(),
+        communityPaths: communityPaths,
+      );
+      return ferryFree.withNotice(shortestFerryNotice);
+    }
 
     List<PathCandidate> candidates;
     try {
@@ -2223,7 +2337,10 @@ class RouteService {
     }
 
     var best = baseline;
-    for (final candidate in candidates.take(maxCommunityCandidates)) {
+    final limit = preferences.shortest
+        ? maxShortestCandidates
+        : maxCommunityCandidates;
+    for (final candidate in candidates.take(limit)) {
       try {
         final stitched = await stitchCommunityPath(
           start: start,
@@ -2232,7 +2349,7 @@ class RouteService {
           avoidFerries: avoidFerries,
           preferences: preferences,
         );
-        if (stitched.durationSeconds < best.durationSeconds) best = stitched;
+        if (isBetter(stitched, best, preferences)) best = stitched;
       } catch (_) {
         // This path could not be connected. Keep the best route so far.
       }
@@ -2341,6 +2458,7 @@ class RouteService {
       ],
       distanceMeters: bikeDistance,
       durationSeconds: math.max(bikeDuration, scheduledDuration),
+      notice: toBoarding.notice ?? fromExit.notice,
     );
   }
 
@@ -2446,7 +2564,7 @@ class RouteService {
     final trip = body['trip'] as Map<String, dynamic>? ?? const {};
     final summary = trip['summary'] as Map<String, dynamic>? ?? const {};
     if (avoidFerries && summary['has_ferry'] == true) {
-      throw Exception('No ferry-free bike route is available for this trip.');
+      throw const FerryRouteException();
     }
     final legs = trip['legs'] as List<dynamic>? ?? const [];
     if (legs.isEmpty) throw Exception('No bike route was returned.');
@@ -2560,5 +2678,32 @@ class RouteResult {
     this.segments = const [],
     this.trainLegs = const [],
     this.trainStations = const [],
+    this.notice,
   });
+
+  /// A note for the rider about how this route was chosen, if any.
+  final String? notice;
+
+  RouteResult withNotice(String? notice) => RouteResult(
+    points: points,
+    summary: summary,
+    directions: directions,
+    distanceMeters: distanceMeters,
+    durationSeconds: durationSeconds,
+    segments: segments,
+    trainLegs: trainLegs,
+    trainStations: trainStations,
+    notice: notice,
+  );
+}
+
+// Valhalla returned a route that uses a ferry while ferries are avoided.
+class FerryRouteException implements Exception {
+  const FerryRouteException();
+
+  static const String message =
+      'No ferry-free bike route is available for this trip.';
+
+  @override
+  String toString() => message;
 }
