@@ -9,14 +9,28 @@ import 'package:google_polyline_algorithm/google_polyline_algorithm.dart';
 import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:supabase_flutter/supabase_flutter.dart' show Supabase;
 
+import 'auth_gateway.dart';
+import 'config.dart';
 import 'screens/add_path.dart';
 import 'screens/community_paths.dart';
 import 'screens/mta_subway_service.dart';
 import 'screens/path_service.dart';
 import 'screens/route_preferences.dart';
 
-void main() {
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await Supabase.initialize(
+    url: supabaseUrl,
+    publishableKey: supabasePublishableKey,
+  );
+
+  // Remove the old on-phone accounts. They stored passwords as plain text.
+  final prefs = await SharedPreferences.getInstance();
+  await prefs.remove('bike_nav_accounts');
+  await prefs.remove('bike_nav_current_user');
+
   runApp(const BikeNavApp());
 }
 
@@ -97,109 +111,74 @@ class BikeProfile {
 class Account {
   final String fullName;
   final String email;
-  final String password;
   final BikeProfile? bikeProfile;
 
   const Account({
     required this.fullName,
     required this.email,
-    required this.password,
     this.bikeProfile,
   });
-
-  Map<String, dynamic> toMap() => {
-    'fullName': fullName,
-    'email': email,
-    'password': password,
-    if (bikeProfile != null) 'bikeProfile': bikeProfile!.toMap(),
-  };
-
-  factory Account.fromMap(Map<String, dynamic> map) {
-    final savedBikeProfile = map['bikeProfile'];
-    return Account(
-      fullName: map['fullName'] as String? ?? '',
-      email: map['email'] as String? ?? '',
-      password: map['password'] as String? ?? '',
-      bikeProfile: savedBikeProfile is Map
-          ? BikeProfile.fromMap(Map<String, dynamic>.from(savedBikeProfile))
-          : null,
-    );
-  }
 }
 
 class AuthService {
-  static const String _accountsKey = 'bike_nav_accounts';
-  static const String _currentUserKey = 'bike_nav_current_user';
+  static Future<String?> getSignedInUser() async => authGateway.currentEmail;
 
-  static Future<List<Account>> loadAccounts() async {
-    final prefs = await SharedPreferences.getInstance();
-    final data = prefs.getString(_accountsKey);
-    if (data == null) return [];
+  static Future<void> signIn(String email, String password) =>
+      authGateway.signIn(email, password);
 
-    final accounts = jsonDecode(data) as List<dynamic>;
-    return accounts
-        .map((account) => Account.fromMap(account as Map<String, dynamic>))
-        .toList();
-  }
+  static Future<void> signUp(String fullName, String email, String password) =>
+      authGateway.signUp(fullName, email, password);
 
-  static Future<void> saveAccount(Account account) async {
-    final accounts = await loadAccounts();
-    accounts.add(account);
-    await _saveAccounts(accounts);
-  }
+  static Future<void> signOut() => authGateway.signOut();
 
   static Future<Account?> findAccount(String email) async {
-    final accounts = await loadAccounts();
-    for (final account in accounts) {
-      if (account.email.toLowerCase() == email.toLowerCase()) return account;
+    final signedIn = authGateway.currentEmail;
+    if (signedIn == null || signedIn.toLowerCase() != email.toLowerCase()) {
+      return null;
     }
-    return null;
+    return Account(
+      fullName: authGateway.fullName ?? '',
+      email: signedIn,
+      bikeProfile: await BikeProfileStore.load(signedIn),
+    );
   }
 
   static Future<void> saveBikeProfile(
     String email,
     BikeProfile bikeProfile,
   ) async {
-    final accounts = await loadAccounts();
-    final accountIndex = accounts.indexWhere(
-      (account) => account.email.toLowerCase() == email.toLowerCase(),
-    );
-    if (accountIndex == -1) {
+    if (await findAccount(email) == null) {
       throw StateError('Could not find the account for this bike profile.');
     }
+    await BikeProfileStore.save(email, bikeProfile);
+  }
+}
 
-    final account = accounts[accountIndex];
-    accounts[accountIndex] = Account(
-      fullName: account.fullName,
-      email: account.email,
-      password: account.password,
-      bikeProfile: bikeProfile,
-    );
-    await _saveAccounts(accounts);
+/// TEMPORARY (Phase 1 only): keeps bike profiles on the phone until the
+/// backend exists. Deleted in Phase 3.
+class BikeProfileStore {
+  static const String _key = 'bike_nav_bike_profiles';
+
+  static Future<BikeProfile?> load(String email) async {
+    final prefs = await SharedPreferences.getInstance();
+    final data = prefs.getString(_key);
+    if (data == null) return null;
+    final profiles = jsonDecode(data) as Map<String, dynamic>;
+    final saved = profiles[email.toLowerCase()];
+    return saved is Map
+        ? BikeProfile.fromMap(Map<String, dynamic>.from(saved))
+        : null;
   }
 
-  static Future<void> _saveAccounts(List<Account> accounts) async {
+  static Future<void> save(String email, BikeProfile profile) async {
     final prefs = await SharedPreferences.getInstance();
-    final saved = await prefs.setString(
-      _accountsKey,
-      jsonEncode(accounts.map((account) => account.toMap()).toList()),
-    );
-    if (!saved) throw StateError('Could not save account data.');
-  }
-
-  static Future<void> saveSignedInUser(String email) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_currentUserKey, email);
-  }
-
-  static Future<String?> getSignedInUser() async {
-    final prefs = await SharedPreferences.getInstance();
-    return prefs.getString(_currentUserKey);
-  }
-
-  static Future<void> signOut() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.remove(_currentUserKey);
+    final data = prefs.getString(_key);
+    final profiles = data == null
+        ? <String, dynamic>{}
+        : jsonDecode(data) as Map<String, dynamic>;
+    profiles[email.toLowerCase()] = profile.toMap();
+    final saved = await prefs.setString(_key, jsonEncode(profiles));
+    if (!saved) throw StateError('Could not save bike profile.');
   }
 }
 
@@ -431,11 +410,13 @@ class _AuthScreenState extends State<AuthScreen> {
     super.dispose();
   }
 
+  // Supabase remembers the session, so there is nothing to save here.
   Future<void> _goToMap(String email) async {
-    await AuthService.saveSignedInUser(email);
     if (!mounted) return;
+    // Supabase stores emails in lowercase; use its copy when there is one.
+    final signedIn = authGateway.currentEmail ?? email;
     Navigator.of(context).pushReplacement(
-      MaterialPageRoute(builder: (_) => MapScreen(userEmail: email)),
+      MaterialPageRoute(builder: (_) => MapScreen(userEmail: signedIn)),
     );
   }
 
@@ -443,21 +424,14 @@ class _AuthScreenState extends State<AuthScreen> {
     if (!_loginFormKey.currentState!.validate()) return;
 
     final messenger = ScaffoldMessenger.maybeOf(context);
-    final accounts = await AuthService.loadAccounts();
     final email = _loginEmailController.text.trim();
     final password = _loginPasswordController.text;
 
-    final valid = accounts.any(
-      (account) =>
-          account.email.toLowerCase() == email.toLowerCase() &&
-          account.password == password,
-    );
-
-    if (!valid) {
+    try {
+      await AuthService.signIn(email, password);
+    } on AuthFailure catch (error) {
       if (!mounted) return;
-      messenger?.showSnackBar(
-        const SnackBar(content: Text('Invalid email or password.')),
-      );
+      messenger?.showSnackBar(SnackBar(content: Text(error.message)));
       return;
     }
 
@@ -482,22 +456,13 @@ class _AuthScreenState extends State<AuthScreen> {
       return;
     }
 
-    final accounts = await AuthService.loadAccounts();
-    final exists = accounts.any(
-      (account) => account.email.toLowerCase() == email.toLowerCase(),
-    );
-
-    if (exists) {
+    try {
+      await AuthService.signUp(name, email, password);
+    } on AuthFailure catch (error) {
       if (!mounted) return;
-      messenger?.showSnackBar(
-        const SnackBar(content: Text('This account already exists.')),
-      );
+      messenger?.showSnackBar(SnackBar(content: Text(error.message)));
       return;
     }
-
-    await AuthService.saveAccount(
-      Account(fullName: name, email: email, password: password),
-    );
 
     if (!mounted) return;
     await _goToMap(email);

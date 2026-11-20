@@ -2,11 +2,18 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'package:bike_nav/auth_gateway.dart';
 import 'package:bike_nav/main.dart';
 
+import 'fake_auth_gateway.dart';
+
 void main() {
-  testWidgets('shows account options on launch', (tester) async {
+  setUp(() {
     SharedPreferences.setMockInitialValues({});
+    authGateway = FakeAuthGateway();
+  });
+
+  testWidgets('shows account options on launch', (tester) async {
     await tester.pumpWidget(const BikeNavApp());
     await tester.pumpAndSettle();
 
@@ -15,9 +22,7 @@ void main() {
   });
 
   testWidgets('restores a signed-in rider to the map', (tester) async {
-    SharedPreferences.setMockInitialValues({
-      'bike_nav_current_user': 'rider@example.com',
-    });
+    authGateway = FakeAuthGateway(currentEmail: 'rider@example.com');
 
     await tester.pumpWidget(const BikeNavApp());
     await tester.pumpAndSettle();
@@ -28,18 +33,13 @@ void main() {
   });
 
   testWidgets('opens and saves the rider bike profile', (tester) async {
-    SharedPreferences.setMockInitialValues({});
-    await AuthService.saveAccount(
-      const Account(
-        fullName: 'Test Rider',
-        email: 'rider@example.com',
-        password: 'secure123',
-        bikeProfile: BikeProfile(
-          name: 'City bike',
-          type: 'City / commuter',
-          isElectric: false,
-        ),
-      ),
+    authGateway = FakeAuthGateway(
+      currentEmail: 'rider@example.com',
+      fullName: 'Test Rider',
+    );
+    await BikeProfileStore.save(
+      'rider@example.com',
+      const BikeProfile(name: 'City bike', type: 'City / commuter', isElectric: false),
     );
     tester.view.physicalSize = const Size(780, 1200);
     tester.view.devicePixelRatio = 2;
@@ -92,18 +92,13 @@ void main() {
   testWidgets('shows route choices and the bike being routed for', (
     tester,
   ) async {
-    SharedPreferences.setMockInitialValues({});
-    await AuthService.saveAccount(
-      const Account(
-        fullName: 'Test Rider',
-        email: 'rider@example.com',
-        password: 'secure123',
-        bikeProfile: BikeProfile(
-          name: 'Commuter',
-          type: 'Road',
-          isElectric: false,
-        ),
-      ),
+    authGateway = FakeAuthGateway(
+      currentEmail: 'rider@example.com',
+      fullName: 'Test Rider',
+    );
+    await BikeProfileStore.save(
+      'rider@example.com',
+      const BikeProfile(name: 'Commuter', type: 'Road', isElectric: false),
     );
     tester.view.physicalSize = const Size(780, 1200);
     tester.view.devicePixelRatio = 2;

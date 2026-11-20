@@ -17,6 +17,7 @@ dependencies:
   latlong2: ^0.9.1
   path_provider: ^2.1.6
   shared_preferences: ^2.3.0
+  supabase_flutter: ^2.18.3
 
 dev_dependencies:
   flutter_test:

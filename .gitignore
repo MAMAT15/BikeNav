@@ -10,3 +10,4 @@
 *.symbols
 *.map.json
 .widget_preview/
+backend/.env
