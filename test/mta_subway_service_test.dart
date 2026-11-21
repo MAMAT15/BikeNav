@@ -4,7 +4,7 @@ import 'package:archive/archive.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:latlong2/latlong.dart';
 
-import 'package:bike_nav/screens/mta_subway_service.dart';
+import 'package:bike_nav/services/mta_subway_service.dart';
 
 void main() {
   test('parses active subway schedules and station data from GTFS', () async {

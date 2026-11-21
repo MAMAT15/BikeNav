@@ -10,8 +10,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:bike_nav/main.dart';
 import 'package:bike_nav/screens/add_path.dart';
-import 'package:bike_nav/screens/mta_subway_service.dart';
-import 'package:bike_nav/screens/path_service.dart';
+import 'package:bike_nav/services/mta_subway_service.dart';
+import 'package:bike_nav/services/path_service.dart';
 import 'package:bike_nav/screens/route_preferences.dart';
 
 // A path exactly as the first Add Path version saved it.

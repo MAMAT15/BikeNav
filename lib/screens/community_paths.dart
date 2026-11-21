@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:latlong2/latlong.dart';
 
-import 'path_service.dart';
+import '../services/path_service.dart';
 
 // Lists the rider's own submissions and pending paths they can confirm.
 class CommunityPathsScreen extends StatefulWidget {
@@ -30,6 +30,7 @@ class _CommunityPathsScreenState extends State<CommunityPathsScreen> {
     loadPaths();
   }
 
+  // Loads the saved community paths shown on this screen.
   Future<void> loadPaths() async {
     try {
       final loaded = await PathService.loadPaths();
@@ -64,6 +65,7 @@ class _CommunityPathsScreenState extends State<CommunityPathsScreen> {
   }
 
   // Confirm that the rider rode this path
+  // Adds this rider's confirmation, then reloads the path list.
   Future<void> confirmPath(CommunityPath path) async {
     setState(() => confirmingId = path.id);
 

@@ -15,8 +15,8 @@ import 'auth_gateway.dart';
 import 'config.dart';
 import 'screens/add_path.dart';
 import 'screens/community_paths.dart';
-import 'screens/mta_subway_service.dart';
-import 'screens/path_service.dart';
+import 'services/mta_subway_service.dart';
+import 'services/path_service.dart';
 import 'screens/route_preferences.dart';
 
 Future<void> main() async {
@@ -120,6 +120,7 @@ class Account {
   });
 }
 
+// Keeps the screens using simple account methods while auth is handled by Supabase.
 class AuthService {
   static Future<String?> getSignedInUser() async => authGateway.currentEmail;
 
@@ -131,6 +132,7 @@ class AuthService {
 
   static Future<void> signOut() => authGateway.signOut();
 
+  // Gets the signed-in rider and their bike profile saved on this device.
   static Future<Account?> findAccount(String email) async {
     final signedIn = authGateway.currentEmail;
     if (signedIn == null || signedIn.toLowerCase() != email.toLowerCase()) {
@@ -143,6 +145,7 @@ class AuthService {
     );
   }
 
+  // Checks that this rider is signed in before saving their bike profile.
   static Future<void> saveBikeProfile(
     String email,
     BikeProfile bikeProfile,
@@ -255,6 +258,7 @@ class _BikeProfileFormState extends State<_BikeProfileForm> {
     super.dispose();
   }
 
+  // Validates the form, saves the bike profile, and shows the result.
   Future<void> _saveProfile() async {
     if (!_formKey.currentState!.validate()) return;
 
@@ -420,6 +424,7 @@ class _AuthScreenState extends State<AuthScreen> {
     );
   }
 
+  // Sends the login details to AuthService, then opens the map.
   Future<void> _handleLogin() async {
     if (!_loginFormKey.currentState!.validate()) return;
 
@@ -439,6 +444,7 @@ class _AuthScreenState extends State<AuthScreen> {
     await _goToMap(email);
   }
 
+  // Checks the two passwords, creates the account, and opens the map.
   Future<void> _handleSignup() async {
     if (!_signupFormKey.currentState!.validate()) return;
 
@@ -468,12 +474,14 @@ class _AuthScreenState extends State<AuthScreen> {
     await _goToMap(email);
   }
 
+  // Shared email check used by both the login and sign-up forms.
   String? _validateEmail(String? value) {
     if (value == null || value.trim().isEmpty) return 'Enter your email';
     if (!value.contains('@')) return 'Enter a valid email';
     return null;
   }
 
+  // Reusable email input for the login and sign-up forms.
   Widget _emailField(TextEditingController controller) {
     return TextFormField(
       controller: controller,
@@ -487,6 +495,7 @@ class _AuthScreenState extends State<AuthScreen> {
     );
   }
 
+  // Reusable password input, including the show/hide button.
   Widget _passwordField({
     required TextEditingController controller,
     required String label,
@@ -513,6 +522,7 @@ class _AuthScreenState extends State<AuthScreen> {
     );
   }
 
+  // Keeps the main auth buttons looking the same on both forms.
   Widget _submitButton(String label, VoidCallback onPressed) {
     return SizedBox(
       width: double.infinity,
@@ -680,6 +690,7 @@ class MapScreen extends StatefulWidget {
   State<MapScreen> createState() => _MapScreenState();
 }
 
+// Holds the map, route search, and active navigation state.
 class _MapScreenState extends State<MapScreen> {
   static const _trainLineColor = Color(0xFF8E24AA);
   static const _transferColor = Color(0xFFE65100);
@@ -727,12 +738,14 @@ class _MapScreenState extends State<MapScreen> {
   List<CommunityPath> _communityPaths = const [];
 
   @override
+  // Load the rider's saved profile and community paths when the map opens.
   void initState() {
     super.initState();
     _loadCommunityPaths();
     _loadBikeProfile();
   }
 
+  // Loads saved paths so verified ones can be considered during route planning.
   Future<void> _loadCommunityPaths() async {
     try {
       final paths = await PathService.loadPaths();
@@ -743,6 +756,7 @@ class _MapScreenState extends State<MapScreen> {
     }
   }
 
+  // Loads the current rider's bike settings for route preferences.
   Future<void> _loadBikeProfile() async {
     try {
       final account = await AuthService.findAccount(widget.userEmail);
@@ -795,6 +809,7 @@ class _MapScreenState extends State<MapScreen> {
     super.dispose();
   }
 
+  // Gets a GPS position after checking location services and permission.
   Future<LatLng> _getCurrentLocation() async {
     if (!await Geolocator.isLocationServiceEnabled()) {
       throw Exception('Turn on location services and try again.');
@@ -813,6 +828,7 @@ class _MapScreenState extends State<MapScreen> {
     return LatLng(position.latitude, position.longitude);
   }
 
+  // Uses the phone's current GPS position as the route starting point.
   Future<void> _useCurrentLocation() async {
     try {
       final location = await _getCurrentLocation();
@@ -834,6 +850,7 @@ class _MapScreenState extends State<MapScreen> {
     }
   }
 
+  // Searches for start or destination suggestions after the rider stops typing.
   void _searchPlaces(String query, {required bool isOrigin}) {
     final trimmedQuery = query.trim();
     final searchVersion = isOrigin
@@ -886,6 +903,7 @@ class _MapScreenState extends State<MapScreen> {
     }
   }
 
+  // Saves the selected suggestion so route planning can use its coordinates.
   void _selectPlace(PlaceSuggestion suggestion, {required bool isOrigin}) {
     setState(() {
       if (isOrigin) {
@@ -901,6 +919,7 @@ class _MapScreenState extends State<MapScreen> {
     FocusScope.of(context).unfocus();
   }
 
+  // Loads the timetable once and reuses it for later train route searches.
   Future<MtaSubwayData> _loadMtaSubwayData() async {
     final loaded = _mtaSubwayData;
     if (loaded != null) return loaded;
@@ -914,6 +933,7 @@ class _MapScreenState extends State<MapScreen> {
     }
   }
 
+  // Resolves the start/end points, plans bike and optional train routes, then displays the best result.
   Future<void> _planRoute() async {
     final origin = _originController.text.trim();
     final destination = _destinationController.text.trim();
@@ -1055,6 +1075,7 @@ class _MapScreenState extends State<MapScreen> {
     }
   }
 
+  // Starts GPS updates and begins following the route currently on the map.
   Future<void> _startNavigation() async {
     if (_routePoints.isEmpty || _routeEnd == null) return;
 
@@ -1096,6 +1117,7 @@ class _MapScreenState extends State<MapScreen> {
     }
   }
 
+  // Stops GPS updates and clears the active navigation state.
   Future<void> _stopNavigation() async {
     await _positionSubscription?.cancel();
     _positionSubscription = null;
@@ -1108,6 +1130,7 @@ class _MapScreenState extends State<MapScreen> {
     });
   }
 
+  // Updates the rider marker, distance to the next step, and off-route checks.
   void _handlePosition(Position position) {
     if (!mounted || !_isNavigating) return;
     final location = LatLng(position.latitude, position.longitude);
@@ -1130,6 +1153,7 @@ class _MapScreenState extends State<MapScreen> {
     }
   }
 
+  // Moves to the next instruction when the rider reaches the current step.
   void _updateNextDirection(LatLng location) {
     while (_nextDirectionIndex < _directions.length - 1) {
       final point = _directions[_nextDirectionIndex].endLocation;
@@ -1141,6 +1165,7 @@ class _MapScreenState extends State<MapScreen> {
     }
   }
 
+  // Measures how far the current GPS position is from the planned route.
   double _distanceFromRoute(LatLng location) {
     final distance = const Distance();
     var closest = double.infinity;
@@ -1151,6 +1176,7 @@ class _MapScreenState extends State<MapScreen> {
     return closest;
   }
 
+  // Requests a new bike route when the rider has moved too far off course.
   Future<void> _recalculateRoute(LatLng location) async {
     final destination = _routeEnd;
     if (destination == null) return;
@@ -1193,6 +1219,7 @@ class _MapScreenState extends State<MapScreen> {
     });
   }
 
+  // Shows the station's scheduled departures when a rider taps an MTA stop.
   void _showMtaStationDetails(MtaStation station, MtaTrainLeg? nextLeg) {
     final data = _mtaSubwayData;
     if (data == null) return;
@@ -1258,6 +1285,7 @@ class _MapScreenState extends State<MapScreen> {
     );
   }
 
+  // Finds the next train leg that leaves the selected station.
   MtaTrainLeg? _nextTrainLegFrom(String stationId) {
     for (final leg in _trainRouteLegs) {
       if (leg.fromStationId == stationId) return leg;
@@ -2090,6 +2118,7 @@ class PlaceSuggestion {
   });
 }
 
+// Handles place search and converts Photon results into app locations.
 class PlaceService {
   static Uri searchUri(String query, {LatLng? near}) {
     return Uri.https('photon.komoot.io', '/api/', {
@@ -2100,6 +2129,7 @@ class PlaceService {
     });
   }
 
+  // Calls Photon and turns the response into place suggestions.
   static Future<List<PlaceSuggestion>> searchLocations(
     String query, {
     LatLng? near,
@@ -2116,6 +2146,7 @@ class PlaceService {
     return parseSuggestions(jsonDecode(response.body) as Map<String, dynamic>);
   }
 
+  // Reads Photon result fields and creates coordinates and labels for the UI.
   static List<PlaceSuggestion> parseSuggestions(Map<String, dynamic> body) {
     final features = body['features'] as List<dynamic>? ?? const [];
     return features.map((feature) {
@@ -2176,7 +2207,9 @@ class PlaceService {
   }
 }
 
+// Builds bike routes and compares them with verified community paths or MTA trips.
 class RouteService {
+  // Sends one bike-routing request to Valhalla and parses its response.
   static Future<RouteResult> fetchBikeRoute({
     required LatLng start,
     required LatLng end,
@@ -2500,6 +2533,7 @@ class RouteService {
     );
   }
 
+  // Builds the Valhalla request using the rider's bike and route settings.
   static Map<String, dynamic> requestBody({
     required LatLng start,
     required LatLng end,
@@ -2522,6 +2556,7 @@ class RouteService {
     };
   }
 
+  // Converts Valhalla's route response into points and turn instructions.
   static RouteResult parseValhallaResponse(
     Map<String, dynamic> body, {
     bool avoidFerries = false,

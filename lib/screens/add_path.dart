@@ -9,7 +9,7 @@ import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart';
 
 import '../main.dart' show AuthService;
-import 'path_service.dart';
+import '../services/path_service.dart';
 
 class AddPathScreen extends StatefulWidget {
   final String userEmail;
@@ -208,6 +208,7 @@ class _AddPathScreenState extends State<AddPathScreen> {
   }
 
   // Start GPS recording
+  // Starts GPS recording after checking that location permission is available.
   Future<void> startRecording() async {
     bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
 
@@ -284,6 +285,7 @@ class _AddPathScreenState extends State<AddPathScreen> {
   }
 
   // Stop GPS recording
+  // Stops the GPS stream and keeps the points recorded so far.
   Future<void> stopRecording() async {
     await positionStream?.cancel();
     positionStream = null;
@@ -296,6 +298,7 @@ class _AddPathScreenState extends State<AddPathScreen> {
   }
 
   // Submit path
+  // Checks the recorded route and saves it as a pending community path.
   Future<void> submitPath() async {
     if (selectedStart == null || selectedEnd == null) {
       ScaffoldMessenger.of(context).showSnackBar(
